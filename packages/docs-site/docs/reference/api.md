@@ -31,6 +31,8 @@ description: 当前代码库中公开的主要 REST 端点。
 | `POST` | `/api/projects/:id/restore` | 恢复项目 |
 | `DELETE` | `/api/projects/:id` | 删除项目，实际执行归档 |
 
+`GET /api/projects` 的每个项目包含 `lastActivityAt`：取该项目最近一条未删除任务的创建时间；没有任务时使用项目创建时间。任务后续更新不会改变该值，客户端可据此按项目活跃度排序，无需加载任务列表。
+
 ## Tasks
 
 | Method | Path | 说明 |

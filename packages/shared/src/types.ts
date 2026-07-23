@@ -305,6 +305,8 @@ export interface Project {
   quickCommands?: string | null
   archivedAt?: string | null
   repoDeletedAt?: string | null
+  /** 最近一条未删除任务的创建时间；无任务时为项目创建时间。 */
+  lastActivityAt?: string
   createdAt?: string
   updatedAt?: string
 }

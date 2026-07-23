@@ -26,6 +26,7 @@ import { BrandLogo, BrandLogoTitle } from '@/components/BrandLogo'
 import { CreateTaskInput } from '@/components/task/CreateTaskInput'
 import { cn } from '@/lib/utils'
 import { useDesktopTitlebar } from '@/lib/desktop-titlebar'
+import { sortProjectsByActivity } from '@/lib/project-activity'
 
 type CreateStep = 'idle' | 'creating-task' | 'creating-teamrun' | 'creating-workspace' | 'creating-session' | 'starting-session'
 type CreateTaskMode = 'SOLO' | 'TEAM'
@@ -200,7 +201,6 @@ export function ProjectKanbanPage() {
   // === API 数据 ===
   const { data: projectsData, isLoading: isProjectsLoading } = useProjects({ limit: PROJECT_LIST_LIMIT })
   const projects = useMemo(() => projectsData?.data ?? [], [projectsData?.data])
-  const uiProjects = useMemo(() => projects.map(adaptProject), [projects])
   const effectiveFilterProjectId = filterProjectId && projects.some(project => project.id === filterProjectId)
     ? filterProjectId
     : null
@@ -243,23 +243,9 @@ export function ProjectKanbanPage() {
 
   // 按活跃度排序 projects：根据最近创建的任务时间
   const sortedProjects = useMemo(() => {
-    // 计算每个 project 的最新任务时间
-    const projectLastTaskTime = new Map<string, number>()
-    for (const task of rawTasks) {
-      const taskTime = task.updatedAt
-      const currentMax = projectLastTaskTime.get(task.projectId) ?? 0
-      if (taskTime > currentMax) {
-        projectLastTaskTime.set(task.projectId, taskTime)
-      }
-    }
-
-    // 排序：有任务的项目按最新任务时间降序，没有任务的项目按创建时间降序
-    return [...projects].sort((a, b) => {
-      const aTime = projectLastTaskTime.get(a.id) ?? (a.createdAt ? new Date(a.createdAt).getTime() : 0)
-      const bTime = projectLastTaskTime.get(b.id) ?? (b.createdAt ? new Date(b.createdAt).getTime() : 0)
-      return bTime - aTime
-    })
-  }, [projects, rawTasks])
+    return sortProjectsByActivity(projects)
+  }, [projects])
+  const uiProjects = useMemo(() => sortedProjects.map(adaptProject), [sortedProjects])
   const activeProjects = useMemo(
     () => sortedProjects.filter(project => !project.archivedAt),
     [sortedProjects],

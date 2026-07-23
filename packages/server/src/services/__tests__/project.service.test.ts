@@ -49,6 +49,56 @@ describe('ProjectService', () => {
     fs.rmSync(testDir, { recursive: true, force: true });
   });
 
+  it('returns activity from the latest-created non-deleted task and ignores later updates', async () => {
+    const service = new ProjectService();
+    const emptyCreatedAt = new Date('2026-01-02T00:00:00.000Z');
+    const projectCreatedAt = new Date('2026-01-01T00:00:00.000Z');
+    const latestVisibleTaskCreatedAt = new Date('2026-01-05T00:00:00.000Z');
+    const emptyProject = await prisma.project.create({
+      data: {
+        name: 'Empty activity project',
+        repoPath: testDir,
+        createdAt: emptyCreatedAt,
+      },
+    });
+    const activeProject = await prisma.project.create({
+      data: {
+        name: 'Active project',
+        repoPath: testDir,
+        createdAt: projectCreatedAt,
+      },
+    });
+    await prisma.task.createMany({
+      data: [
+        {
+          title: 'Older visible task',
+          projectId: activeProject.id,
+          createdAt: new Date('2026-01-04T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-20T00:00:00.000Z'),
+        },
+        {
+          title: 'Latest-created visible task',
+          projectId: activeProject.id,
+          createdAt: latestVisibleTaskCreatedAt,
+          updatedAt: new Date('2026-01-06T00:00:00.000Z'),
+        },
+        {
+          title: 'Later-created deleted task',
+          projectId: activeProject.id,
+          createdAt: new Date('2026-01-10T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-21T00:00:00.000Z'),
+          deletedAt: new Date('2026-01-11T00:00:00.000Z'),
+        },
+      ],
+    });
+
+    const result = await service.findAll({ limit: 100 });
+    const projectById = new Map(result.data.map((project) => [project.id, project]));
+
+    expect(projectById.get(activeProject.id)?.lastActivityAt).toBe(latestVisibleTaskCreatedAt.toISOString());
+    expect(projectById.get(emptyProject.id)?.lastActivityAt).toBe(emptyCreatedAt.toISOString());
+  });
+
   it('excludes deleted tasks from project detail taskStats', async () => {
     const service = new ProjectService();
     const project = await prisma.project.create({

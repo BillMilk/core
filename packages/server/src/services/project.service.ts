@@ -265,8 +265,27 @@ export class ProjectService {
       prisma.project.count({ where }),
     ]);
 
+    const latestTaskCreations = data.length === 0
+      ? []
+      : await prisma.task.groupBy({
+          by: ['projectId'],
+          where: {
+            projectId: { in: data.map((project) => project.id) },
+            deletedAt: null,
+          },
+          _max: { createdAt: true },
+        });
+    const lastTaskCreatedAtByProject = new Map(
+      latestTaskCreations.map((item) => [item.projectId, item._max.createdAt])
+    );
+
     return {
-      data: data.map((project) => this.withGitMetadata(project)),
+      data: data.map((project) => ({
+        ...this.withGitMetadata(project),
+        lastActivityAt: (
+          lastTaskCreatedAtByProject.get(project.id) ?? project.createdAt
+        ).toISOString(),
+      })),
       total,
       page,
       limit,

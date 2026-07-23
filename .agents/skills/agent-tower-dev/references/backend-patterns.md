@@ -33,6 +33,8 @@ Task 看板热路径使用 `GET /api/task-board` 的紧凑 DTO，固定批量查
 
 Project 的 Git capability 是持久化读模型。Project/Task/board 列表只读保存值，不运行 `git rev-parse`；创建、恢复、显式 refresh，以及 Worktree/TeamRun 这类危险操作前才实时探测并回写。旧库 null capability 可以做廉价 `.git` fallback，但不能在列表请求启动 Git 子进程。
 
+Project 列表的 `lastActivityAt` 是后端聚合读模型：取最近一条未删除 Task 的 `createdAt`，无任务时回退 Project `createdAt`；Task 后续更新不推进该时间。项目选择器必须使用该字段排序，不要从受筛选和分页限制的 task board 在前端反推。
+
 Schema 变化后更新 Prisma client，并为可发布数据变化提供 migration；`db:push` 只用于无需保留历史的开发库。
 
 ## EventBus 与 Socket.IO
