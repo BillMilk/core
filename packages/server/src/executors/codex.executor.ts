@@ -11,6 +11,7 @@ import { parse as parseToml } from 'smol-toml';
 import { ExecutorConfigurationError } from './start-error.js';
 import { AgentType } from '../types/index.js';
 import { which } from '../utils/index.js';
+import { hasCodexBuiltinProviderAliasCollision } from '../utils/codex-provider-config.js';
 import {
   BaseExecutor,
   AvailabilityInfo,
@@ -65,6 +66,12 @@ function toTomlLiteral(value: unknown): string {
   }
   return String(value);
 }
+
+function toTomlPathSegment(value: string): string {
+  return /^[A-Za-z0-9_-]+$/.test(value) ? value : JSON.stringify(value);
+}
+
+export const CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID = 'agent-tower-openai-http';
 
 const AGENT_TOWER_MCP_ENV_KEYS = [
   ...AGENT_TOWER_MCP_IDENTITY_ENV_KEYS,
@@ -378,6 +385,8 @@ export interface CodexConfig {
   model?: string;
   /** 跳过所有确认提示并在无沙箱环境下执行命令（危险，仅用于外部已隔离的环境） */
   dangerouslyBypassApprovalsAndSandbox?: boolean;
+  /** 强制适用的 Codex Responses API Provider 使用 HTTP transport。 */
+  disableResponsesWebsocket?: boolean;
   /** 启用实时网络搜索 */
   liveSearch?: boolean;
   /** 配置 profile 名称，对应 ~/.codex/config.toml 中的 [profiles.xxx] */
@@ -386,6 +395,26 @@ export interface CodexConfig {
   settings?: string;
   /** 命令覆盖 */
   cmd?: CmdOverrides;
+  /** Agent Tower 已解析的当前 model provider 连接；不包含 secret。 */
+  connection?: {
+    providerKind: 'built-in' | 'custom';
+    modelProviderId: string;
+    baseUrl?: string;
+    envKey?: string;
+  };
+}
+
+export type CodexPermissionMode = 'full-bypass' | 'noninteractive-workspace';
+
+/**
+ * Resolve the permission mode once when an executor is created. Invalid or
+ * missing values stay on the safe path; provider validation rejects them at
+ * the persistence boundary, while this guard protects direct executor use.
+ */
+export function getCodexPermissionMode(config: Pick<CodexConfig, 'dangerouslyBypassApprovalsAndSandbox'>): CodexPermissionMode {
+  return config.dangerouslyBypassApprovalsAndSandbox === true
+    ? 'full-bypass'
+    : 'noninteractive-workspace';
 }
 
 /**
@@ -400,10 +429,12 @@ export class CodexExecutor extends BaseExecutor {
   readonly displayName = 'Codex';
 
   private config: CodexConfig;
+  private readonly permissionMode: CodexPermissionMode;
 
   constructor(config: CodexConfig = {}) {
     super();
     this.config = config;
+    this.permissionMode = getCodexPermissionMode(config);
     this.cmdOverrides = config.cmd;
   }
 
@@ -484,6 +515,57 @@ export class CodexExecutor extends BaseExecutor {
       }
     }
 
+    // Apply the effective permission mode after raw settings so the safe
+    // defaults cannot be overridden accidentally by an Advanced snippet.
+    if (this.permissionMode === 'noninteractive-workspace') {
+      args.push(
+        '-c', 'approval_policy=never',
+        '-c', 'sandbox_mode=workspace-write',
+      );
+    }
+
+    if (this.config.connection) {
+      const connection = this.config.connection;
+      args.push('-c', `model_provider=${toTomlLiteral(connection.modelProviderId)}`);
+      if (connection.baseUrl) {
+        if (connection.providerKind === 'built-in') {
+          args.push('-c', `openai_base_url=${toTomlLiteral(connection.baseUrl)}`);
+        } else {
+          const providerKey = toTomlPathSegment(connection.modelProviderId);
+          args.push('-c', `model_providers.${providerKey}.base_url=${toTomlLiteral(connection.baseUrl)}`);
+          if (connection.envKey) {
+            args.push('-c', `model_providers.${providerKey}.env_key=${toTomlLiteral(connection.envKey)}`);
+          }
+        }
+      }
+    }
+
+    if (this.config.disableResponsesWebsocket === true && this.config.connection) {
+      const connection = this.config.connection;
+      if (connection.providerKind === 'custom') {
+        const providerKey = toTomlPathSegment(connection.modelProviderId);
+        args.push('-c', `model_providers.${providerKey}.supports_websockets=false`);
+      } else {
+        if (hasCodexBuiltinProviderAliasCollision(this.config.settings, CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID)) {
+          throw new ExecutorConfigurationError(
+            this.agentType,
+            new Error(
+              "disableResponsesWebsocket conflicts with reserved Codex model provider alias 'agent-tower-openai-http'",
+            ),
+          );
+        }
+        const aliasKey = toTomlPathSegment(CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID);
+        args.push(
+          '-c', `model_providers.${aliasKey}.name=${toTomlLiteral('OpenAI')}`,
+          '-c', `model_providers.${aliasKey}.base_url=${toTomlLiteral(connection.baseUrl)}`,
+          '-c', `model_providers.${aliasKey}.wire_api=${toTomlLiteral('responses')}`,
+          '-c', `model_providers.${aliasKey}.requires_openai_auth=true`,
+          '-c', `model_providers.${aliasKey}.supports_websockets=false`,
+          '-c', `model_provider=${toTomlLiteral(CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID)}`,
+        );
+      }
+    }
+
     return args;
   }
 
@@ -504,8 +586,9 @@ export class CodexExecutor extends BaseExecutor {
       builder.extendParams(['--model', this.config.model]);
     }
 
-    // 跳过所有确认提示并在无沙箱环境下执行命令（危险模式，类似 Claude Code 的 --dangerously-skip-permissions）
-    if (this.config.dangerouslyBypassApprovalsAndSandbox) {
+    // Only an explicit boolean true opts into full bypass. Safe-mode defaults
+    // are emitted by buildConfigOverrides after raw settings.
+    if (this.permissionMode === 'full-bypass') {
       builder.extendParams(['--dangerously-bypass-approvals-and-sandbox']);
     }
 

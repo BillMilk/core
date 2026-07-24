@@ -59,11 +59,11 @@ export function SettingsMasterDetail<T>({
   const selectedItem = items.find(item => getItemId(item) === selectedId) ?? null
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[240px_minmax(0,1fr)] lg:h-[calc(100vh-16rem)] lg:max-h-[640px]">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[240px_minmax(0,1fr)] lg:h-[calc(100vh-16rem)] lg:max-h-[640px]">
       {/* List sidebar — independent scroll */}
       <div
         className={cn(
-          'space-y-1 lg:overflow-y-auto lg:pr-1 scrollbar-app-thin',
+          'min-w-0 space-y-1 lg:overflow-y-auto lg:pr-1 scrollbar-app-thin',
           mobileShowDetail && 'hidden lg:block',
           listClassName,
         )}
@@ -77,7 +77,7 @@ export function SettingsMasterDetail<T>({
               onClick={() => onSelectItem(id)}
               aria-current={isActive ? 'true' : undefined}
               className={cn(
-                'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60',
+                'flex min-w-0 w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60',
                 isActive
                   ? 'bg-primary text-primary-foreground'
                   : 'text-foreground hover:bg-muted/50',
@@ -94,7 +94,7 @@ export function SettingsMasterDetail<T>({
       {/* Detail panel — independent scroll */}
       <div
         className={cn(
-          'rounded-xl border border-border bg-card lg:overflow-y-auto scrollbar-app-thin',
+          'min-w-0 rounded-xl border border-border bg-card lg:overflow-y-auto scrollbar-app-thin',
           !mobileShowDetail && 'hidden lg:block',
           detailClassName,
         )}

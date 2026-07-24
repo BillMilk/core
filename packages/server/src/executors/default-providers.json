@@ -39,9 +39,7 @@
       "name": "Codex",
       "agentType": "CODEX",
       "env": {},
-      "config": {
-        "dangerouslyBypassApprovalsAndSandbox": true
-      },
+      "config": {},
       "isDefault": true,
       "builtIn": true
     }

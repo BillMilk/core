@@ -2,19 +2,19 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../lib/api-client'
 import { queryKeys } from './query-keys'
 import type {
-  Provider,
-  AgentType,
+  ProviderCapabilityMatrix,
   ProviderBackupFile,
+  ProviderDraftInput,
+  ProviderDraftTestResult,
   ProviderImportPreview,
   ProviderImportResult,
+  RedactedProvider,
 } from '@agent-tower/shared'
 
 // ─── Types ───────────────────────────────────────────────────────
 
 export interface ProviderWithAvailability {
-  provider: Provider & {
-    deletable?: boolean
-  }
+  provider: RedactedProvider
   availability: {
     type: 'LOGIN_DETECTED' | 'INSTALLATION_FOUND' | 'NOT_FOUND'
     lastAuthTimestamp?: number
@@ -22,22 +22,8 @@ export interface ProviderWithAvailability {
   }
 }
 
-export interface CreateProviderInput {
-  name: string
-  agentType: AgentType
-  env?: Record<string, string>
-  config?: Record<string, unknown>
-  settings?: string
-  isDefault?: boolean
-}
-
-export interface UpdateProviderInput {
-  name?: string
-  env?: Record<string, string>
-  config?: Record<string, unknown>
-  settings?: string
-  isDefault?: boolean
-}
+export type CreateProviderInput = Omit<ProviderDraftInput, 'providerId'>
+export type UpdateProviderInput = Partial<Omit<ProviderDraftInput, 'providerId' | 'agentType'>>
 
 // ─── Queries ─────────────────────────────────────────────────────
 
@@ -53,8 +39,16 @@ export function useProviders() {
 export function useProvider(id: string) {
   return useQuery({
     queryKey: queryKeys.providers.detail(id),
-    queryFn: () => apiClient.get<Provider>(`/providers/${id}`),
+    queryFn: () => apiClient.get<RedactedProvider>(`/providers/${id}`),
     enabled: !!id,
+  })
+}
+
+export function useProviderCapabilities() {
+  return useQuery({
+    queryKey: queryKeys.providers.capabilities,
+    queryFn: () => apiClient.get<ProviderCapabilityMatrix>('/providers/capabilities'),
+    staleTime: Infinity,
   })
 }
 
@@ -64,8 +58,9 @@ export function useProvider(id: string) {
 export function useCreateProvider() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (input: CreateProviderInput) => apiClient.post<Provider>('/providers', input),
-    onSuccess: () => {
+    mutationFn: (input: CreateProviderInput) => apiClient.post<RedactedProvider>('/providers', input),
+    onSuccess: provider => {
+      qc.setQueryData(queryKeys.providers.detail(provider.id), provider)
       qc.invalidateQueries({ queryKey: queryKeys.providers.all })
     },
   })
@@ -76,10 +71,19 @@ export function useUpdateProvider() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: UpdateProviderInput }) =>
-      apiClient.put<Provider>(`/providers/${id}`, data),
-    onSuccess: () => {
+      apiClient.put<RedactedProvider>(`/providers/${id}`, data),
+    onSuccess: provider => {
+      qc.setQueryData(queryKeys.providers.detail(provider.id), provider)
       qc.invalidateQueries({ queryKey: queryKeys.providers.all })
+      qc.invalidateQueries({ queryKey: queryKeys.providers.detail(provider.id) })
     },
+  })
+}
+
+export function useTestProviderDraft() {
+  return useMutation({
+    mutationFn: (input: ProviderDraftInput) =>
+      apiClient.post<ProviderDraftTestResult>('/providers/test', input),
   })
 }
 

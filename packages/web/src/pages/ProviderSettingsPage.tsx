@@ -8,6 +8,8 @@ import {
   useExportProviderBackup,
   usePreviewProviderImport,
   useImportProviderBackup,
+  useProviderCapabilities,
+  useTestProviderDraft,
 } from '@/hooks/use-providers'
 import type { CreateProviderInput, UpdateProviderInput, ProviderWithAvailability } from '@/hooks/use-providers'
 import { Button } from '@/components/ui/button'
@@ -15,19 +17,47 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Input } from '@/components/ui/input'
 import { Modal } from '@/components/ui/modal'
 import { Select } from '@/components/ui/select'
-import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { Plus, Pencil, Trash2, CheckCircle2, XCircle, ChevronDown, Download, Upload, RotateCcw, AlertTriangle, Cpu } from 'lucide-react'
+import { Switch } from '@/components/ui/switch'
+import { Plus, Pencil, Trash2, CheckCircle2, XCircle, ChevronDown, Download, Upload, RotateCcw, AlertTriangle, Cpu, FlaskConical, KeyRound, Loader2 } from 'lucide-react'
 import {
   AgentType,
+  PROVIDER_CAPABILITIES,
   type AppLocale,
   type ProviderBackupFile,
+  type ProviderDraftInput,
+  type ProviderDraftTestResult,
+  type ProviderConfigDiagnostic,
+  type ProviderConflictResolution,
   type ProviderImportAction,
   type ProviderImportPreview,
+  type ProviderSecretWriteState,
+  type ProviderSimplifiedConfig,
 } from '@agent-tower/shared'
 import { toast } from 'sonner'
 import { AgentLogo } from '@/components/agent'
 import { CursorAgentModelField } from '@/components/provider/CursorAgentModelField'
+import { ProviderDraftTestResultPanel } from '@/components/provider/ProviderDraftTestResultPanel'
+import { SegmentedEffortSlider } from '@/components/provider/SegmentedEffortSlider'
+import {
+  buildProviderEnvWrites,
+  createProviderDraftTestSequence,
+  createProviderEnvDraftRows,
+  getApiBaseUrlValidationError,
+  getApiKeyDraftStatus,
+  getExecutionPermissionState,
+  getProviderBooleanConfigState,
+  isProviderEnvDraftRowSensitive,
+  isSameProviderEnvKey,
+  markActiveCredentialEnvRowSensitive,
+  resolveProviderDraftConflict,
+  syncSimplifiedFromConfig,
+  syncSimplifiedFromSettings,
+  updateSimplifiedDraftValue,
+  updateProviderBooleanConfig,
+  usesCodexNativeModelProvider,
+  type ProviderEnvDraftRow,
+} from '@/components/provider/provider-draft'
 import { translate, useI18n } from '@/lib/i18n'
 import { getAgentLabel } from '@/lib/agent-meta'
 import { cn } from '@/lib/utils'
@@ -57,35 +87,19 @@ const APPEND_PROMPT_FIELD: ConfigFieldMeta = {
 const AGENT_CONFIG_FIELDS: Record<string, ConfigFieldMeta[]> = {
   [AgentType.CLAUDE_CODE]: [
     { key: 'dangerouslySkipPermissions', label: '跳过权限确认', type: 'switch' },
-    { key: 'model', label: '模型', type: 'input', placeholder: 'claude-sonnet-4-20250514' },
-    {
-      key: 'effort',
-      label: '推理强度',
-      type: 'select',
-      options: [
-        { value: '', label: '默认' },
-        { value: 'low', label: 'Low' },
-        { value: 'medium', label: 'Medium' },
-        { value: 'high', label: 'High' },
-        { value: 'xhigh', label: 'XHigh' },
-        { value: 'max', label: 'Max' },
-      ],
-    },
     APPEND_PROMPT_FIELD,
   ],
   [AgentType.GEMINI_CLI]: [
-    { key: 'yolo', label: '跳过权限确认', type: 'switch' },
-    { key: 'model', label: '模型', type: 'input', placeholder: 'gemini-2.5-pro' },
+    { key: 'yolo', label: '自动批准操作（YOLO）', type: 'switch' },
     APPEND_PROMPT_FIELD,
   ],
   [AgentType.CURSOR_AGENT]: [
     { key: 'force', label: '强制执行', type: 'switch' },
-    { key: 'model', label: '模型', type: 'cursor_model' },
     APPEND_PROMPT_FIELD,
   ],
   [AgentType.CODEX]: [
     { key: 'dangerouslyBypassApprovalsAndSandbox', label: '跳过所有确认和沙盒', type: 'switch' },
-    { key: 'model', label: '模型', type: 'input', placeholder: 'o3' },
+    { key: 'disableResponsesWebsocket', label: '禁用 WebSocket', type: 'switch' },
     { key: 'profile', label: 'Profile', type: 'input', placeholder: '~/.codex/config.toml 中的 profile 名称' },
     APPEND_PROMPT_FIELD,
   ],
@@ -191,6 +205,20 @@ function hasSettingsPanel(agentType: AgentType): boolean {
   return agentType === AgentType.CLAUDE_CODE || agentType === AgentType.CODEX
 }
 
+function removeClaudeEnvSetting(settings: string, key: string): string {
+  if (!settings.trim()) return settings
+  try {
+    const parsed = JSON.parse(settings) as Record<string, unknown>
+    if (!parsed.env || typeof parsed.env !== 'object' || Array.isArray(parsed.env)) return settings
+    const env = parsed.env as Record<string, unknown>
+    if (!(key in env)) return settings
+    delete env[key]
+    return JSON.stringify(parsed, null, 2)
+  } catch {
+    return settings
+  }
+}
+
 const CONFIG_FIELD_LABELS: Record<string, string> = Object.values(AGENT_CONFIG_FIELDS)
   .flat()
   .reduce<Record<string, string>>((acc, field) => {
@@ -218,6 +246,27 @@ function formatConfigValue(key: string, value: unknown): string {
 
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
+}
+
+function getDiagnosticFieldLabel(field: ProviderConfigDiagnostic['field']): string {
+  if (field === 'apiBaseUrl') return 'API 地址'
+  if (field === 'apiKey') return 'API Key'
+  if (field === 'reasoningEffort') return '思考强度'
+  if (field === 'model') return '模型'
+  if (field === 'executionPermission') return '执行权限'
+  if (field === 'disableResponsesWebsocket') return '禁用 WebSocket'
+  return field
+}
+
+function getEffortLabel(value: string): string {
+  return ({
+    minimal: '最低',
+    low: '低',
+    medium: '中',
+    high: '高',
+    xhigh: '超高',
+    max: '最高',
+  } as Record<string, string>)[value] ?? value
 }
 
 function formatBackupFilename(exportedAt: string): string {
@@ -278,21 +327,25 @@ function AvailabilityBadge({ type }: { type: string }) {
   )
 }
 
-interface ProviderFormData {
+export interface ProviderFormData {
   name: string
   agentType: AgentType
   config: Record<string, unknown>
   settings: string
-  env: Array<{ key: string; value: string }>
+  env: ProviderEnvDraftRow[]
+  simplified: ProviderSimplifiedConfig
+  diagnostics?: ProviderConfigDiagnostic[]
   isDefault: boolean
 }
 
 function CollapsibleSection({
   title,
+  status,
   defaultOpen = false,
   children,
 }: {
   title: string
+  status?: React.ReactNode
   defaultOpen?: boolean
   children: React.ReactNode
 }) {
@@ -305,7 +358,10 @@ function CollapsibleSection({
         aria-expanded={open}
         className="w-full flex items-center justify-between rounded-lg px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset"
       >
-        {title}
+        <span className="flex min-w-0 items-center gap-2">
+          <span>{title}</span>
+          {status}
+        </span>
         <ChevronDown
           size={14}
           aria-hidden="true"
@@ -317,166 +373,281 @@ function CollapsibleSection({
   )
 }
 
-function ConfigFieldsForm({
-  agentType,
-  config,
-  onChange,
-}: {
-  agentType: AgentType
-  config: Record<string, unknown>
-  onChange: (config: Record<string, unknown>) => void
-}) {
-  const { t } = useI18n()
-  const fields = AGENT_CONFIG_FIELDS[agentType] ?? []
-  if (fields.length === 0) return <p className="text-xs text-muted-foreground">{t('该类型暂无运行配置')}</p>
-
-  const updateField = (key: string, value: unknown) => {
-    onChange({ ...config, [key]: value })
-  }
-
-  return (
-    <div className="space-y-3">
-      {fields.map(field =>
-        field.type === 'textarea' ? (
-          <div key={field.key}>
-            <label className="mb-1 block text-sm text-foreground">{t(field.label)}</label>
-            <Textarea
-              value={(config[field.key] as string) ?? ''}
-              onChange={e => updateField(field.key, e.target.value || undefined)}
-              placeholder={field.placeholder ? t(field.placeholder) : undefined}
-              rows={field.rows ?? 3}
-              className="py-1.5"
-            />
-          </div>
-        ) : field.type === 'cursor_model' ? (
-          <div key={field.key} className="flex flex-col gap-2 sm:flex-row sm:items-start">
-            <label className="w-32 shrink-0 text-sm text-foreground sm:pt-2">{t(field.label)}</label>
-            <CursorAgentModelField
-              value={(config[field.key] as string) ?? ''}
-              onChange={v => updateField(field.key, v)}
-            />
-          </div>
-        ) : (
-          <div key={field.key} className="flex items-center gap-3">
-            <label className="w-32 shrink-0 text-sm text-foreground">{t(field.label)}</label>
-            {field.type === 'switch' && (
-              <Switch
-                checked={!!config[field.key]}
-                onCheckedChange={checked => updateField(field.key, checked)}
-                aria-label={t(field.label)}
-              />
-            )}
-            {field.type === 'input' && (
-              <Input
-                value={(config[field.key] as string) ?? ''}
-                onChange={e => updateField(field.key, e.target.value || undefined)}
-                placeholder={field.placeholder ? t(field.placeholder) : undefined}
-                className="flex-1 py-1.5"
-              />
-            )}
-            {field.type === 'select' && field.options && (
-              <Select
-                value={(config[field.key] as string) ?? ''}
-                onChange={value => updateField(field.key, value || undefined)}
-                options={field.options.map(option => ({
-                  ...option,
-                  label: t(option.label),
-                }))}
-                placeholder={t('选择...')}
-              />
-            )}
-          </div>
-        )
-      )}
-    </div>
-  )
-}
-
-function ProviderFormModal({
+export function ProviderFormModal({
   isOpen,
   onClose,
+  providerId,
   initialData,
   onSave,
 }: {
   isOpen: boolean
   onClose: () => void
+  providerId?: string
   initialData?: ProviderFormData
   onSave: (data: CreateProviderInput | UpdateProviderInput) => void
 }) {
   const { locale, t } = useI18n()
+  const { data: capabilities } = useProviderCapabilities()
+  const testProvider = useTestProviderDraft()
   const [formData, setFormData] = useState<ProviderFormData>(
     initialData ?? {
       name: '',
       agentType: AgentType.CLAUDE_CODE,
       config: getDefaultConfigForAgentType(),
-      settings: getSettingsTemplate(AgentType.CLAUDE_CODE, locale),
+      settings: '',
       env: [],
+      simplified: {
+        apiKey: { configured: false, envKey: 'ANTHROPIC_API_KEY' },
+      },
+      diagnostics: [],
       isDefault: false,
     }
   )
-  const [settingsError, setSettingsError] = useState('')
+  const [configText, setConfigText] = useState(() => JSON.stringify(formData.config, null, 2))
+  const [configError, setConfigError] = useState('')
+  const [settingsError, setSettingsError] = useState(
+    () => formData.diagnostics?.find(diagnostic => diagnostic.field === 'settings')?.message ?? '',
+  )
+  const [settingsTouched, setSettingsTouched] = useState(false)
+  const [dirty, setDirty] = useState(false)
+  const [testResult, setTestResult] = useState<ProviderDraftTestResult | null>(null)
+  const [simplifiedTouched, setSimplifiedTouched] = useState<Set<'apiBaseUrl' | 'model' | 'reasoningEffort'>>(() => new Set())
+  const [conflicts, setConflicts] = useState(
+    () => formData.diagnostics?.filter(diagnostic => diagnostic.code === 'CONFLICT') ?? [],
+  )
+  const [conflictResolutions, setConflictResolutions] = useState<Record<string, ProviderConflictResolution>>({})
+  const testSequence = useRef(createProviderDraftTestSequence())
+
+  const capability = capabilities?.[formData.agentType] ?? PROVIDER_CAPABILITIES[formData.agentType]
+  const apiBaseUrlError = capability.apiBaseUrl
+    ? getApiBaseUrlValidationError(formData.simplified.apiBaseUrl)
+    : null
+  const permissionState = getExecutionPermissionState(formData.config, capability)
+  const websocketCapability = capability.disableResponsesWebsocket
+  const websocketState = websocketCapability
+    ? getProviderBooleanConfigState(formData.config, websocketCapability)
+    : null
+  const reasoningEffort = formData.simplified.reasoningEffort ?? ''
+  const reasoningEffortError = reasoningEffort
+    && !capability.reasoningEffort?.options?.includes(reasoningEffort)
+    ? t('请选择当前 Agent 支持的思考强度档位')
+    : null
+
+  const commitDraftChange = (updater?: (previous: ProviderFormData) => ProviderFormData) => {
+    testSequence.current.invalidate()
+    if (updater) setFormData(updater)
+    setDirty(true)
+    setTestResult(null)
+  }
+
+  const updateForm = (updater: (previous: ProviderFormData) => ProviderFormData) => {
+    commitDraftChange(updater)
+  }
+
+  const requestClose = () => {
+    if (dirty && !window.confirm(t('存在未保存的修改，确定放弃吗？'))) return
+    onClose()
+  }
+
+  const getEnvRow = (key: string) => formData.env.find(row => isSameProviderEnvKey(row.key, key))
+
+  const setEnvWrite = (key: string, write: ProviderSecretWriteState, value = '') => {
+    if (write.action !== 'keep') {
+      const mappedField = key === capability.apiBaseUrl?.path
+        ? 'apiBaseUrl'
+        : key === capability.apiKey?.path
+          ? 'apiKey'
+          : null
+      if (mappedField) {
+        setConflictResolutions(previous => {
+          const next = { ...previous }
+          delete next[mappedField]
+          return next
+        })
+      }
+    }
+    updateForm(previous => {
+      const existingIndex = previous.env.findIndex(row => isSameProviderEnvKey(row.key, key))
+      const next = [...previous.env]
+      const current = existingIndex >= 0 ? next[existingIndex]! : null
+      const row: ProviderEnvDraftRow = {
+        key: current?.key ?? key,
+        value,
+        write,
+        configured: current?.configured ?? false,
+        sensitive: isSameProviderEnvKey(key, previous.simplified.apiKey?.envKey)
+          || !!current?.sensitive
+          || /key|token|secret|password|auth/i.test(key),
+      }
+      if (existingIndex >= 0) next[existingIndex] = row
+      else next.push(row)
+      const shouldRemoveClaudeSetting = previous.agentType === AgentType.CLAUDE_CODE
+        && write.action !== 'keep'
+        && (key === capability.apiBaseUrl?.path || key === capability.apiKey?.path)
+      return {
+        ...previous,
+        env: next,
+        settings: shouldRemoveClaudeSetting ? removeClaudeEnvSetting(previous.settings, key) : previous.settings,
+      }
+    })
+  }
+
+  const updateSimple = (field: 'apiBaseUrl' | 'model' | 'reasoningEffort', value: string) => {
+    setConflictResolutions(previous => {
+      if (!(field in previous)) return previous
+      const next = { ...previous }
+      delete next[field]
+      return next
+    })
+    setSimplifiedTouched(previous => new Set(previous).add(field))
+    if (field === 'apiBaseUrl' && capability.apiBaseUrl?.kind === 'env') {
+      setEnvWrite(capability.apiBaseUrl.path, value ? { action: 'replace', value } : { action: 'clear' }, value)
+    }
+    updateForm(previous => {
+      const next = updateSimplifiedDraftValue(previous, field, value, capability)
+      if (next.config !== previous.config) setConfigText(JSON.stringify(next.config, null, 2))
+      return next
+    })
+  }
+
+  const setDisableResponsesWebsocket = (enabled: boolean) => {
+    if (!websocketCapability) return
+    updateForm(previous => {
+      const next = updateProviderBooleanConfig(previous, websocketCapability, enabled)
+      setConfigText(JSON.stringify(next.config, null, 2))
+      return next
+    })
+  }
 
   const handleAgentTypeChange = (type: AgentType) => {
-    setFormData(prev => ({
-      ...prev,
+    if (dirty && !window.confirm(t('切换 Agent 类型会清空当前类型的配置，是否继续？'))) return
+    const nextCapability = PROVIDER_CAPABILITIES[type]
+    const next: ProviderFormData = {
+      ...formData,
       agentType: type,
       config: getDefaultConfigForAgentType(),
-      settings: getSettingsTemplate(type, locale),
-    }))
+      settings: '',
+      env: [],
+      simplified: {
+        apiKey: nextCapability.apiKey
+          ? { configured: false, envKey: nextCapability.apiKey.path }
+          : undefined,
+      },
+    }
+    commitDraftChange(() => next)
+    setConfigText('{}')
+    setConfigError('')
+    setSettingsError('')
+    setSettingsTouched(false)
+    setSimplifiedTouched(new Set())
+    setConflicts([])
+    setConflictResolutions({})
+  }
+
+  const validateAdvanced = (forTest = false): boolean => {
+    let valid = !configError && !permissionState.error && !websocketState?.error && !reasoningEffortError
+    const settings = formData.settings.trim()
+    if (settings && (settingsTouched || forTest)) {
+      try {
+        if (formData.agentType === AgentType.CODEX) parseToml(settings)
+        else if (formData.agentType === AgentType.CLAUDE_CODE) {
+          const parsed = JSON.parse(settings) as unknown
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(t('JSON 顶层必须是对象'))
+        }
+        setSettingsError('')
+      } catch (error) {
+        setSettingsError(t('{format} 语法错误: {message}', {
+          format: formData.agentType === AgentType.CODEX ? 'TOML' : 'JSON',
+          message: error instanceof Error ? error.message : String(error),
+        }))
+        valid = false
+      }
+    }
+    return valid
+  }
+
+  const buildDraft = (): ProviderDraftInput => {
+    const env = buildProviderEnvWrites(formData.env)
+    const simplified = Object.fromEntries(
+      [...simplifiedTouched].map(field => [field, formData.simplified[field]]),
+    ) as ProviderSimplifiedConfig
+    return {
+      providerId,
+      name: formData.name,
+      agentType: formData.agentType,
+      env,
+      config: formData.config,
+      settings: formData.settings,
+      simplified: simplifiedTouched.size > 0 ? simplified : undefined,
+      conflictResolutions,
+      isDefault: formData.isDefault,
+    }
   }
 
   const handleSave = () => {
-    setSettingsError('')
-    const normalizedConfig = normalizeProviderConfig(formData.agentType, formData.config)
-    const cleanConfig: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(normalizedConfig)) {
-      if (v !== undefined && v !== '') cleanConfig[k] = v
-    }
-
-    const settingsStr = formData.settings.trim()
-    if (settingsStr) {
-      if (formData.agentType === AgentType.CODEX) {
-        try { parseToml(settingsStr) } catch (e) {
-          setSettingsError(t('TOML 语法错误: {message}', { message: e instanceof Error ? e.message : String(e) }))
-          return
-        }
-      } else if (formData.agentType === AgentType.CLAUDE_CODE) {
-        try { JSON.parse(settingsStr) } catch {
-          setSettingsError(t('JSON 语法错误'))
-          return
-        }
-      }
-    }
-
-    const envRecord: Record<string, string> = {}
-    for (const { key, value } of formData.env) {
-      const k = key.trim()
-      if (k) envRecord[k] = value
-    }
-
-    const isUpdate = !!initialData
-    const data: CreateProviderInput = {
-      name: formData.name,
-      agentType: formData.agentType,
-      config: cleanConfig,
-      settings: isUpdate ? (settingsStr || '') : (settingsStr || undefined),
-      env: isUpdate ? envRecord : (Object.keys(envRecord).length > 0 ? envRecord : undefined),
-      isDefault: formData.isDefault,
-    }
+    if (apiBaseUrlError || !validateAdvanced(false)) return
+    const draft = buildDraft()
+    const data = { ...draft }
+    delete data.providerId
     onSave(data)
+  }
+
+  const handleTest = () => {
+    if (apiBaseUrlError || conflicts.length > 0 || !validateAdvanced(true)) return
+    const requestId = testSequence.current.begin()
+    setTestResult(null)
+    testProvider.mutate(buildDraft(), {
+      onSuccess: result => {
+        if (testSequence.current.isCurrent(requestId)) setTestResult(result)
+      },
+      onError: error => {
+        if (testSequence.current.isCurrent(requestId)) {
+          setTestResult({
+            ok: false,
+            stage: 'connection',
+            errorKind: 'unknown',
+            summary: getErrorMessage(error, t('测试配置失败')),
+          })
+        }
+      },
+    })
   }
 
   if (!isOpen) return null
 
   const showSettingsPanel = hasSettingsPanel(formData.agentType)
   const isCodex = formData.agentType === AgentType.CODEX
+  const usesNativeCodexConnection = isCodex && usesCodexNativeModelProvider(formData.settings)
+  const apiKeyPath = formData.simplified.apiKey?.envKey ?? capability.apiKey?.path
+  const apiKeyRow = apiKeyPath ? getEnvRow(apiKeyPath) : undefined
+  const apiKeyStatus = getApiKeyDraftStatus(
+    apiKeyRow,
+    !!formData.simplified.apiKey?.configured,
+    conflictResolutions.apiKey,
+  )
+  const apiKeyAdvancedManaged = apiKeyStatus === 'advanced'
+  const keyConfigured = apiKeyStatus !== 'unconfigured'
+  const saveBlocked = !formData.name.trim() || !!apiBaseUrlError || !!configError || !!permissionState.error || !!websocketState?.error || !!reasoningEffortError || (!!settingsError && settingsTouched) || conflicts.length > 0
 
   return (
+    <>
     <Modal
       isOpen={isOpen}
-      onClose={onClose}
+      onClose={requestClose}
       title={initialData ? t('编辑 Provider') : t('新建 Provider')}
-      className="max-w-2xl"
+      className="max-w-3xl"
+      action={
+        <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <Button variant="outline" onClick={handleTest} disabled={testProvider.isPending || !!apiBaseUrlError || !!configError || !!permissionState.error || !!websocketState?.error || !!reasoningEffortError || (!!settingsError && settingsTouched) || conflicts.length > 0}>
+            {testProvider.isPending ? <Loader2 className="animate-spin" /> : <FlaskConical />}
+            {testProvider.isPending ? t('测试中...') : t('测试配置')}
+          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={requestClose}>{t('取消')}</Button>
+            <Button onClick={handleSave} disabled={saveBlocked}>{t('保存 Provider')}</Button>
+          </div>
+        </div>
+      }
     >
       <div className="space-y-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -485,7 +656,7 @@ function ProviderFormModal({
             <Input
               id="provider-name"
               value={formData.name}
-              onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
+              onChange={e => updateForm(previous => ({ ...previous, name: e.target.value }))}
               placeholder={t('例如: Claude Code (官方)')}
             />
           </div>
@@ -520,7 +691,7 @@ function ProviderFormModal({
             type="checkbox"
             id="isDefault"
             checked={formData.isDefault}
-            onChange={e => setFormData(prev => ({ ...prev, isDefault: e.target.checked }))}
+            onChange={e => updateForm(previous => ({ ...previous, isDefault: e.target.checked }))}
             className="h-4 w-4 rounded border-border accent-primary"
           />
           <label htmlFor="isDefault" className="text-sm text-foreground">
@@ -528,46 +699,277 @@ function ProviderFormModal({
           </label>
         </div>
 
-        <CollapsibleSection title={t('运行配置')} defaultOpen>
-          <ConfigFieldsForm
-            agentType={formData.agentType}
-            config={formData.config}
-            onChange={config => setFormData(prev => ({ ...prev, config }))}
-          />
-        </CollapsibleSection>
+        <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
+          <div className="text-sm font-medium text-foreground">{t('基本配置')}</div>
+          {capability.apiBaseUrl && !usesNativeCodexConnection && (
+            <div>
+              <label htmlFor="provider-api-url" className="mb-1 block text-xs font-medium text-foreground">{t('API 地址')}</label>
+              <Input
+                id="provider-api-url"
+                type="url"
+                value={formData.simplified.apiBaseUrl ?? ''}
+                onChange={event => updateSimple('apiBaseUrl', event.target.value)}
+                placeholder={capability.apiBaseUrl.placeholder}
+                aria-invalid={!!apiBaseUrlError}
+                aria-describedby={apiBaseUrlError ? 'provider-api-url-error' : undefined}
+              />
+              {apiBaseUrlError && (
+                <p id="provider-api-url-error" role="alert" className="mt-1 text-xs text-destructive">
+                  {t('请输入以 http:// 或 https:// 开头的完整 API 地址')}
+                </p>
+              )}
+            </div>
+          )}
+          {capability.apiKey && !usesNativeCodexConnection && (formData.agentType !== AgentType.CODEX || !!formData.simplified.apiKey) && (
+            <div>
+              <div className="mb-1 flex items-center justify-between gap-3">
+                <label htmlFor="provider-api-key" className="text-xs font-medium text-foreground">API Key</label>
+                <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                  <KeyRound size={12} />
+                  {apiKeyAdvancedManaged ? t('由高级配置管理') : keyConfigured ? t('已配置') : t('未配置')}
+                </span>
+              </div>
+              {apiKeyRow?.write.action === 'replace' || !keyConfigured ? (
+                <div className="flex gap-2">
+                  <Input
+                    id="provider-api-key"
+                    type="password"
+                    autoComplete="new-password"
+                    value={apiKeyRow?.value ?? ''}
+                    onChange={event => setEnvWrite(apiKeyPath!, { action: 'replace', value: event.target.value }, event.target.value)}
+                    placeholder={t('输入 API Key')}
+                  />
+                  {formData.simplified.apiKey?.configured && (
+                    <Button variant="outline" size="sm" onClick={() => setEnvWrite(apiKeyPath!, { action: 'keep' })}>{t('取消替换')}</Button>
+                  )}
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setEnvWrite(apiKeyPath!, { action: 'replace', value: '' })}>{t('替换')}</Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (window.confirm(t('确定清除此 API Key？'))) setEnvWrite(apiKeyPath!, { action: 'clear' })
+                    }}
+                  >
+                    {t('清除')}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+          <div>
+            <label htmlFor="provider-model" className="mb-1 block text-xs font-medium text-foreground">{t('模型')}</label>
+            {formData.agentType === AgentType.CURSOR_AGENT ? (
+              <CursorAgentModelField value={formData.simplified.model ?? ''} onChange={value => updateSimple('model', value ?? '')} />
+            ) : (
+              <Input
+                id="provider-model"
+                value={formData.simplified.model ?? ''}
+                onChange={event => updateSimple('model', event.target.value)}
+                placeholder={capability.model.placeholder}
+              />
+            )}
+          </div>
+          {capability.reasoningEffort && (
+            <SegmentedEffortSlider
+              options={(capability.reasoningEffort.options ?? []).map(value => ({
+                value,
+                label: t(getEffortLabel(value)),
+              }))}
+              value={reasoningEffort}
+              onChange={value => updateSimple('reasoningEffort', value)}
+              label={t('思考强度')}
+              efficiencyLabel={t('更高效')}
+              intelligenceLabel={t('更智能')}
+              followCliLabel={t('跟随 CLI')}
+              currentLabel={t('当前')}
+              error={reasoningEffortError}
+            />
+          )}
+          {websocketCapability && websocketState && (
+            <section className="border-t border-border pt-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-foreground">{t('禁用 WebSocket')}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    {usesNativeCodexConnection
+                      ? t('当前原生 Provider 已使用非 WebSocket 传输；此开关不会添加额外运行时覆盖。')
+                      : t('仅禁用 Codex Responses API 的 WebSocket 传输；新启动和后续继续的请求将使用 HTTP。')}
+                  </div>
+                </div>
+                <Switch
+                  checked={websocketState.enabled}
+                  disabled={!!websocketState.error}
+                  onCheckedChange={setDisableResponsesWebsocket}
+                  aria-label={t('禁用 WebSocket')}
+                />
+              </div>
+              {websocketState.error && (
+                <p role="alert" className="mt-1 text-xs text-destructive">
+                  {t('禁用 WebSocket 字段必须为 true 或 false，请在运行配置 JSON 中修正。')}
+                </p>
+              )}
+            </section>
+          )}
+        </div>
 
-        <CollapsibleSection title={t('环境变量')} defaultOpen={formData.env.length > 0}>
+        {testResult && <ProviderDraftTestResultPanel result={testResult} />}
+
+        {conflicts.length > 0 && (
+          <div className="space-y-3 rounded-lg border border-warning/30 bg-warning/10 p-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <AlertTriangle size={16} className="text-warning" />
+              {t('需要解决配置冲突')}
+            </div>
+            {conflicts.map(conflict => (
+              <div key={conflict.field} className="flex flex-col gap-2 rounded-md border border-warning/20 bg-background/70 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">{t(getDiagnosticFieldLabel(conflict.field))}</span>
+                  {' · '}{t('简化字段与高级配置值不同')}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {(['simple', 'advanced'] as const).map(resolution => (
+                    <Button
+                      key={resolution}
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const field = conflict.field
+                        const resolved = resolveProviderDraftConflict(formData, field, resolution, capability)
+                        updateForm(() => resolved)
+                        setConfigText(JSON.stringify(resolved.config, null, 2))
+                        setConflictResolutions(previous => ({ ...previous, [field]: resolution }))
+                        if (
+                          resolution === 'advanced'
+                          && (field === 'apiBaseUrl' || field === 'model' || field === 'reasoningEffort')
+                        ) {
+                          setSimplifiedTouched(previous => {
+                            const next = new Set(previous)
+                            next.delete(field)
+                            return next
+                          })
+                        }
+                        setConflicts(previous => previous.filter(item => item.field !== field))
+                      }}
+                    >
+                      {resolution === 'simple' ? t('采用简化值') : t('保留高级值')}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <CollapsibleSection
+          title={t('高级配置')}
+          defaultOpen={!!configError || !!settingsError || !!permissionState.error || conflicts.length > 0}
+        >
+          <div>
+            <label className="mb-1 block text-xs font-medium text-foreground">{t('运行配置 (JSON)')}</label>
+            <Textarea
+              value={configText}
+              onChange={event => {
+                const text = event.target.value
+                setConfigText(text)
+                try {
+                  const parsed = JSON.parse(text) as unknown
+                  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(t('JSON 顶层必须是对象'))
+                  const config = parsed as Record<string, unknown>
+                  setConfigError('')
+                  setSimplifiedTouched(previous => {
+                    const next = new Set(previous).add('model' as const)
+                    if (capability.reasoningEffort?.kind === 'config') next.add('reasoningEffort')
+                    return next
+                  })
+                  updateForm(previous => ({
+                    ...previous,
+                    config,
+                    simplified: syncSimplifiedFromConfig(previous.simplified, config, capability),
+                  }))
+                } catch (error) {
+                  commitDraftChange()
+                  setConfigError(error instanceof Error ? error.message : t('JSON 语法错误'))
+                }
+              }}
+              rows={7}
+              className="font-mono"
+              aria-invalid={!!configError}
+            />
+            {configError && <p role="alert" className="mt-1 text-xs text-destructive">{configError}</p>}
+            {permissionState.error && (
+              <p role="alert" className="mt-1 text-xs text-destructive">
+                {t('执行权限字段必须为 true 或 false，请在运行配置 JSON 中修正。')}
+              </p>
+            )}
+          </div>
+
+          <div className="border-t border-border pt-3">
+            <label className="mb-2 block text-xs font-medium text-foreground">{t('环境变量')}</label>
           <p className="text-xs text-muted-foreground mb-2">
             {t('注入到 Agent 进程的环境变量。Codex 的')} <code className="rounded bg-muted px-1">env_key</code> {t('指定的是变量名，实际值需在此处设置。')}
           </p>
           <div className="space-y-2">
-            {formData.env.map((row, i) => (
+            {formData.env.map((row, i) => row.write.action !== 'clear' && (
               <div key={i} className="flex gap-2 items-center">
                 <Input
                   value={row.key}
+                  disabled={row.configured}
                   onChange={e => {
-                    const next = [...formData.env]
-                    next[i] = { ...next[i], key: e.target.value }
-                    setFormData(prev => ({ ...prev, env: next }))
+                    const key = e.target.value
+                    updateForm(previous => {
+                      const next = [...previous.env]
+                      const current = next[i]
+                      if (!current) return previous
+                      const updated = { ...current, key }
+                      next[i] = {
+                        ...updated,
+                        sensitive: isProviderEnvDraftRowSensitive(updated, previous.simplified),
+                      }
+                      return { ...previous, env: next }
+                    })
                   }}
                   placeholder={t('变量名，如 AZURE_OPENAI_API_KEY')}
                   className="flex-1 py-1.5 font-mono"
                 />
                 <Input
                   value={row.value}
+                  type={isProviderEnvDraftRowSensitive(row, formData.simplified) ? 'password' : 'text'}
                   onChange={e => {
                     const next = [...formData.env]
-                    next[i] = { ...next[i], value: e.target.value }
-                    setFormData(prev => ({ ...prev, env: next }))
+                    next[i] = { ...next[i], value: e.target.value, write: { action: 'replace', value: e.target.value } }
+                    updateForm(previous => ({
+                      ...previous,
+                      env: next,
+                      simplified: row.key === capability.apiBaseUrl?.path
+                        ? { ...previous.simplified, apiBaseUrl: e.target.value }
+                        : previous.simplified,
+                    }))
+                    if (row.key === capability.apiBaseUrl?.path) {
+                      setSimplifiedTouched(previous => new Set(previous).add('apiBaseUrl'))
+                    }
                   }}
-                  placeholder={t('值')}
+                  placeholder={row.configured && row.write.action === 'keep' ? t('已配置，输入新值以替换') : t('值')}
                   className="flex-1 py-1.5 font-mono"
                 />
                 <button
                   type="button"
                   onClick={() => {
-                    const next = formData.env.filter((_, j) => j !== i)
-                    setFormData(prev => ({ ...prev, env: next }))
+                    const next = [...formData.env]
+                    if (row.configured) next[i] = { ...row, value: '', write: { action: 'clear' } }
+                    else next.splice(i, 1)
+                    updateForm(previous => ({
+                      ...previous,
+                      env: next,
+                      simplified: row.key === capability.apiBaseUrl?.path
+                        ? { ...previous.simplified, apiBaseUrl: '' }
+                        : previous.simplified,
+                    }))
+                    if (row.key === capability.apiBaseUrl?.path) {
+                      setSimplifiedTouched(previous => new Set(previous).add('apiBaseUrl'))
+                    }
                   }}
                   aria-label={t('删除')}
                   className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
@@ -579,16 +981,24 @@ function ProviderFormModal({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setFormData(prev => ({ ...prev, env: [...prev.env, { key: '', value: '' }] }))}
+              onClick={() => updateForm(previous => ({
+                ...previous,
+                env: [...previous.env, {
+                  key: '', value: '', write: { action: 'replace', value: '' }, configured: false, sensitive: false,
+                }],
+              }))}
             >
               <Plus size={12} className="mr-1" />
               {t('添加变量')}
             </Button>
+            </div>
           </div>
-        </CollapsibleSection>
 
         {showSettingsPanel && (
-          <CollapsibleSection title={isCodex ? t('CLI 原生配置 (config.toml)') : t('CLI 原生配置 (settings.json)')}>
+          <div className="border-t border-border pt-3">
+            <label className="mb-2 block text-xs font-medium text-foreground">
+              {isCodex ? t('CLI 原生配置 (config.toml)') : t('CLI 原生配置 (settings.json)')}
+            </label>
             <p className="text-xs text-muted-foreground mb-2">
               {isCodex ? (
                 <>
@@ -603,8 +1013,38 @@ function ProviderFormModal({
             <Textarea
               value={formData.settings}
               onChange={e => {
-                setFormData(prev => ({ ...prev, settings: e.target.value }))
+                const settings = e.target.value
+                setSettingsTouched(true)
                 setSettingsError('')
+                let parsedSimplified: ProviderSimplifiedConfig | undefined
+                if (isCodex) {
+                  try {
+                    parsedSimplified = syncSimplifiedFromSettings(formData.simplified, settings, AgentType.CODEX)
+                    setSimplifiedTouched(current => new Set(current).add('reasoningEffort'))
+                  } catch {
+                    // Keep the simple value until the advanced text is valid again.
+                  }
+                }
+                updateForm(previous => {
+                  const simplified = parsedSimplified === undefined
+                    ? previous.simplified
+                    : syncSimplifiedFromSettings(
+                        previous.simplified,
+                        settings,
+                        AgentType.CODEX,
+                        new Set(previous.env.flatMap(row => {
+                          if (row.write.action === 'clear') return []
+                          if (row.write.action === 'replace') return row.value ? [row.key] : []
+                          return row.configured ? [row.key] : []
+                        })),
+                      )
+                  return {
+                    ...previous,
+                    settings,
+                    env: markActiveCredentialEnvRowSensitive(previous.env, simplified),
+                    simplified,
+                  }
+                })
               }}
               rows={10}
               className="font-mono"
@@ -614,15 +1054,12 @@ function ProviderFormModal({
             {settingsError && (
               <p role="alert" className="mt-1 text-xs text-destructive">{settingsError}</p>
             )}
-          </CollapsibleSection>
+          </div>
         )}
-
-        <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" onClick={onClose}>{t('取消')}</Button>
-          <Button onClick={handleSave} disabled={!formData.name.trim()}>{t('保存')}</Button>
-        </div>
+        </CollapsibleSection>
       </div>
     </Modal>
+    </>
   )
 }
 
@@ -799,12 +1236,15 @@ function ProviderDetailPanel({
   const provider = item.provider
   const availability = item.availability
   const normalizedConfig = normalizeProviderConfig(provider.agentType as AgentType, provider.config)
-  const configEntries = Object.entries(normalizedConfig).filter(([k]) => k !== 'cmd')
-  const envKeys = Object.keys(provider.env || {})
+  const capability = PROVIDER_CAPABILITIES[provider.agentType as AgentType]
+  const configEntries = Object.entries(normalizedConfig).filter(([k]) => (
+    k !== 'cmd' && k !== capability.executionPermission.path
+  ))
+  const envKeys = Object.keys(provider.redactedEnv || {})
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
+    <div className="min-w-0 space-y-6">
+      <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2.5">
             <h3 className="min-w-0 truncate text-base font-semibold text-foreground">{provider.name}</h3>
@@ -827,7 +1267,7 @@ function ProviderDetailPanel({
             )}
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 sm:shrink-0">
           <Button size="sm" variant="outline" onClick={onEdit}>
             <Pencil size={13} />
             {t('编辑')}
@@ -849,9 +1289,9 @@ function ProviderDetailPanel({
           <SettingsSectionTitle className="mb-3">{t('运行配置')}</SettingsSectionTitle>
           <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border/60">
             {configEntries.map(([k, v]) => (
-              <div key={k} className="flex items-center gap-4 bg-background px-4 py-2.5">
-                <span className="w-32 shrink-0 text-[13px] text-muted-foreground">{t(CONFIG_FIELD_LABELS[k] ?? k)}</span>
-                <span className="font-mono text-[13px] text-foreground">{formatConfigValue(k, v)}</span>
+              <div key={k} className="flex min-w-0 flex-col items-start gap-1 bg-background px-4 py-2.5 sm:flex-row sm:items-center sm:gap-4">
+                <span className="min-w-0 break-words text-[13px] text-muted-foreground sm:w-32 sm:shrink-0">{t(CONFIG_FIELD_LABELS[k] ?? k)}</span>
+                <span className="min-w-0 max-w-full break-all font-mono text-[13px] text-foreground">{formatConfigValue(k, v)}</span>
               </div>
             ))}
           </div>
@@ -863,8 +1303,8 @@ function ProviderDetailPanel({
           <SettingsSectionTitle className="mb-3">{t('环境变量')}</SettingsSectionTitle>
           <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border/60">
             {envKeys.map(k => (
-              <div key={k} className="flex items-center gap-4 bg-background px-4 py-2.5">
-                <span className="font-mono text-[13px] text-foreground">{k}</span>
+              <div key={k} className="flex min-w-0 flex-wrap items-center gap-2 bg-background px-4 py-2.5 sm:gap-4">
+                <span className="min-w-0 max-w-full break-all font-mono text-[13px] text-foreground">{k}</span>
                 <span className="text-[13px] text-muted-foreground" aria-label="hidden">•••••</span>
               </div>
             ))}
@@ -1020,9 +1460,8 @@ export function ProviderSettingsPage() {
 
   const openEdit = (item: ProviderWithAvailability) => {
     const p = item.provider
-    const envEntries = p.env
-      ? Object.entries(p.env as Record<string, string>).map(([key, value]) => ({ key, value }))
-      : []
+    const capability = PROVIDER_CAPABILITIES[p.agentType as AgentType]
+    const envEntries = createProviderEnvDraftRows(p, capability)
     setEditModal({
       id: p.id,
       data: {
@@ -1031,6 +1470,8 @@ export function ProviderSettingsPage() {
         config: normalizeProviderConfig(p.agentType as AgentType, p.config),
         settings: p.settings ?? '',
         env: envEntries,
+        simplified: p.simplified ?? {},
+        diagnostics: p.diagnostics,
         isDefault: p.isDefault,
       },
     })
@@ -1125,7 +1566,7 @@ export function ProviderSettingsPage() {
           }}
           renderDetail={(item) =>
             item ? (
-              <div className="p-5">
+              <div className="min-w-0 p-5">
                 <ProviderDetailPanel
                   item={item}
                   onEdit={() => openEdit(item)}
@@ -1145,6 +1586,7 @@ export function ProviderSettingsPage() {
         <ProviderFormModal
           isOpen={true}
           onClose={() => setEditModal(null)}
+          providerId={editModal.id}
           initialData={editModal.data}
           onSave={data => {
             if (editModal.id) handleUpdate(editModal.id, data)

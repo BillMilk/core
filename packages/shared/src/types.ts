@@ -221,6 +221,86 @@ export interface Provider {
   createdAt?: string;
 }
 
+export type ProviderSecretWriteState =
+  | { action: 'keep' }
+  | { action: 'replace'; value: string }
+  | { action: 'clear' }
+
+export interface ProviderRedactedEnvValue {
+  configured: boolean
+  sensitive: boolean
+}
+
+export interface ProviderSimplifiedConfig {
+  apiBaseUrl?: string
+  apiKey?: {
+    configured: boolean
+    envKey: string
+  }
+  model?: string
+  reasoningEffort?: string
+}
+
+export interface RedactedProvider extends Provider {
+  /** Read APIs leave env empty and expose keys/status here without values. */
+  redactedEnv?: Record<string, ProviderRedactedEnvValue>
+  simplified?: ProviderSimplifiedConfig
+  diagnostics?: ProviderConfigDiagnostic[]
+  deletable?: boolean
+}
+
+export type ProviderConflictResolution = 'simple' | 'advanced'
+
+export interface ProviderDraftInput {
+  providerId?: string
+  name: string
+  agentType: AgentType
+  env?: Record<string, ProviderSecretWriteState>
+  config?: Record<string, unknown>
+  settings?: string
+  simplified?: ProviderSimplifiedConfig
+  conflictResolutions?: Partial<Record<'apiBaseUrl' | 'apiKey' | 'model' | 'reasoningEffort', ProviderConflictResolution>>
+  isDefault?: boolean
+}
+
+export interface ProviderConfigDiagnostic {
+  field: 'name' | 'apiBaseUrl' | 'apiKey' | 'model' | 'reasoningEffort' | 'executionPermission' | 'disableResponsesWebsocket' | 'env' | 'config' | 'settings'
+  code: 'REQUIRED' | 'INVALID_URL' | 'INVALID_ENUM' | 'INVALID_TYPE' | 'INVALID_FORMAT' | 'CONFLICT'
+  message: string
+}
+
+export type ProviderDraftTestStage = 'validation' | 'availability' | 'command' | 'connection'
+
+export type ProviderDraftTestErrorKind =
+  | 'unsupported'
+  | 'network'
+  | 'dns'
+  | 'tls'
+  | 'timeout'
+  | 'authentication'
+  | 'model'
+  | 'rate-limit'
+  | 'server'
+  | 'unknown'
+
+export interface ProviderDraftTestTarget {
+  kind: 'api' | 'cli'
+  /** Non-sensitive endpoint identity. Query strings and credentials are omitted. */
+  endpoint?: string
+  source?: string
+}
+
+export interface ProviderDraftTestResult {
+  ok: boolean
+  stage: ProviderDraftTestStage
+  summary: string
+  availability?: 'LOGIN_DETECTED' | 'INSTALLATION_FOUND' | 'NOT_FOUND'
+  errorKind?: ProviderDraftTestErrorKind
+  target?: ProviderDraftTestTarget
+  testedAt?: string
+  diagnostics?: ProviderConfigDiagnostic[]
+}
+
 export type ProviderBackupMode = 'full'
 
 export interface ProviderBackupFile {

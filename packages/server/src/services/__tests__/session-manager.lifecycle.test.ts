@@ -22,24 +22,35 @@ const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-tower-session-lifec
 const dbPath = path.join(testDir, 'test.db');
 process.env.AGENT_TOWER_DATABASE_URL = `file:${dbPath}`;
 
-const { spawnMock, getProviderByIdMock, getExecutorByProviderMock } = vi.hoisted(() => ({
-  spawnMock: vi.fn(),
-  getProviderByIdMock: vi.fn(),
-  getExecutorByProviderMock: vi.fn(),
-}));
+const {
+  spawnMock,
+  getProviderByIdMock,
+  getExecutorByProviderMock,
+  createMockExecutor,
+} = vi.hoisted(() => {
+  const spawnMock = vi.fn();
+  const createMockExecutor = () => ({
+    agentType: 'CODEX',
+    displayName: 'Mock Codex',
+    getAvailabilityInfo: vi.fn(),
+    getCapabilities: vi.fn(() => []),
+    spawn: spawnMock,
+    // No spawnFollowUp: sendMessage exercises the new-spawn path.
+  });
+  return {
+    spawnMock,
+    getProviderByIdMock: vi.fn(),
+    getExecutorByProviderMock: vi.fn(),
+    createMockExecutor,
+  };
+});
 
 vi.mock('../../executors/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../executors/index.js')>();
+  getExecutorByProviderMock.mockImplementation(createMockExecutor);
   return {
     ...actual,
-    getExecutor: vi.fn(() => ({
-      agentType: 'CODEX',
-      displayName: 'Mock Codex',
-      getAvailabilityInfo: vi.fn(),
-      getCapabilities: vi.fn(() => []),
-      spawn: spawnMock,
-      // 无 spawnFollowUp —— sendMessage 走全新 spawn 路径
-    })),
+    getExecutor: vi.fn(createMockExecutor),
     getExecutorByProvider: getExecutorByProviderMock,
     getProviderById: getProviderByIdMock,
   };
@@ -159,11 +170,91 @@ describe('SessionManager session status vs real process state', () => {
     vi.clearAllMocks();
     getProviderByIdMock.mockReturnValue(null);
     getExecutorByProviderMock.mockReset();
+    getExecutorByProviderMock.mockImplementation(createMockExecutor);
     await prisma.executionProcess.deleteMany();
     await prisma.session.deleteMany();
     await prisma.workspace.deleteMany();
     await prisma.task.deleteMany();
     await prisma.project.deleteMany();
+  });
+
+  it('resolves the latest Provider transport snapshot for every new or retried spawn', async () => {
+    const first = await createSessionFixture({ providerId: 'provider-snapshot' });
+    const second = await createSessionFixture({ providerId: 'provider-snapshot' });
+    const provider = {
+      id: 'provider-snapshot',
+      name: 'Provider Snapshot',
+      agentType: AgentType.CODEX,
+      env: {},
+      config: { disableResponsesWebsocket: false },
+      isDefault: false,
+    };
+    const executorSnapshots: boolean[] = [];
+    getProviderByIdMock.mockImplementation(() => provider);
+    getExecutorByProviderMock.mockImplementation(() => {
+      const snapshot = provider.config.disableResponsesWebsocket;
+      executorSnapshots.push(snapshot);
+      return createMockExecutor();
+    });
+    spawnMock
+      .mockResolvedValueOnce(spawnResultFor(new ControlledPty()))
+      .mockResolvedValueOnce(spawnResultFor(new ControlledPty()));
+
+    const manager = new SessionManager(new EventBus());
+    await manager.start(first.session.id);
+    provider.config.disableResponsesWebsocket = true;
+    await manager.start(second.session.id);
+
+    expect(getExecutorByProviderMock).toHaveBeenNthCalledWith(1, 'provider-snapshot');
+    expect(getExecutorByProviderMock).toHaveBeenNthCalledWith(2, 'provider-snapshot');
+    expect(executorSnapshots).toEqual([false, true]);
+    manager.destroyAll();
+  });
+
+  it('uses one latest Provider snapshot for follow-up resume and its new-session fallback', async () => {
+    const provider = {
+      id: 'provider-follow-up-snapshot',
+      name: 'Provider Follow-up Snapshot',
+      agentType: AgentType.CODEX,
+      env: {},
+      config: { disableResponsesWebsocket: true },
+      isDefault: false,
+    };
+    const observed: Array<{ path: 'resume' | 'fallback'; disabled: boolean }> = [];
+    getProviderByIdMock.mockImplementation(() => provider);
+    getExecutorByProviderMock.mockImplementation(() => {
+      const disabled = provider.config.disableResponsesWebsocket;
+      return {
+        agentType: AgentType.CODEX,
+        displayName: 'Mock Codex',
+        getAvailabilityInfo: vi.fn(),
+        getCapabilities: vi.fn(() => []),
+        spawnFollowUp: vi.fn(async () => {
+          observed.push({ path: 'resume', disabled });
+          provider.config.disableResponsesWebsocket = false;
+          throw new Error('synthetic resume failure');
+        }),
+        spawn: vi.fn(async () => {
+          observed.push({ path: 'fallback', disabled });
+          return spawnResultFor(new ControlledPty());
+        }),
+      };
+    });
+    const { session } = await createSessionFixture({ providerId: provider.id });
+    await prisma.session.update({
+      where: { id: session.id },
+      data: { logSnapshot: JSON.stringify({ sessionId: 'codex-thread-1', entries: [] }) },
+    });
+
+    const manager = new SessionManager(new EventBus());
+    await manager.sendMessage(session.id, 'continue with the current provider');
+
+    expect(getExecutorByProviderMock).toHaveBeenCalledTimes(1);
+    expect(observed).toEqual([
+      { path: 'resume', disabled: true },
+      { path: 'fallback', disabled: true },
+    ]);
+    manager.destroyAll();
   });
 
   afterAll(async () => {

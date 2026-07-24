@@ -10,6 +10,7 @@ import {
   AGENT_TOWER_MCP_IDENTITY_ENV_KEYS,
   AGENT_TOWER_MCP_SERVICE_ENV_KEYS,
   ExecutionEnv,
+  isAgentSubprocessProtectedEnvKey,
 } from '../execution-env.js';
 import { PTY_WRAPPER_ENV_KEYS } from '../../utils/process-launch.js';
 
@@ -67,6 +68,9 @@ const envKeysToRestore = [
   ...AGENT_TOWER_MCP_IDENTITY_ENV_KEYS,
   ...AGENT_TOWER_MCP_SERVICE_ENV_KEYS,
   'AGENT_TOWER_TEST_NORMAL_ENV',
+  'CODEX_API_KEY',
+  'OPENAI_BASE_URL',
+  'PROXY_TOKEN',
 ] as const;
 
 function snapshotEnv(keys: readonly string[]): Record<string, string | undefined> {
@@ -92,6 +96,17 @@ describe('ExecutionEnv.getFullEnv', () => {
 
   afterEach(() => {
     restoreEnv(originalEnv);
+  });
+
+  it('uses the protected env predicate for the final CLAUDECODE child env filter', () => {
+    process.env.CLAUDECODE = 'inherited-marker';
+
+    const fullEnv = ExecutionEnv.default(os.tmpdir())
+      .merge({ CLAUDECODE: 'provider-marker' })
+      .getFullEnv();
+
+    expect(isAgentSubprocessProtectedEnvKey('CLAUDECODE')).toBe(true);
+    expect(fullEnv).not.toHaveProperty('CLAUDECODE');
   });
 
   it('filters Agent Tower service env while preserving normal and TeamRun/MCP env', () => {
@@ -198,6 +213,24 @@ describe('ExecutionEnv.getFullEnv', () => {
       expect(fullEnv).not.toHaveProperty(key);
     }
     expect(fullEnv).not.toHaveProperty('AGENT_TOWER_INTERNAL_TOKEN');
+  });
+
+  it('supports explicit inherited credential masking while keeping profile env overrides', () => {
+    process.env.CODEX_API_KEY = 'parent-codex-sentinel';
+    process.env.OPENAI_BASE_URL = 'https://parent-legacy.example';
+    process.env.PROXY_TOKEN = 'parent-proxy-sentinel';
+
+    const profiled = ExecutionEnv.default(os.tmpdir())
+      .merge({ OPENAI_BASE_URL: 'https://session-legacy.example' })
+      .withProfile({
+        unsetEnv: ['CODEX_API_KEY', 'OPENAI_BASE_URL', 'PROXY_TOKEN'],
+        env: { PROXY_TOKEN: 'provider-proxy-sentinel' },
+      })
+      .getFullEnv();
+
+    expect(profiled).not.toHaveProperty('CODEX_API_KEY');
+    expect(profiled).not.toHaveProperty('OPENAI_BASE_URL');
+    expect(profiled.PROXY_TOKEN === 'provider-proxy-sentinel').toBe(true);
   });
 });
 

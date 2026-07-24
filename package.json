@@ -13,6 +13,7 @@
     "desktop:package:acceptance": "pnpm --filter @agent-tower/desktop package:acceptance",
     "desktop:package:smoke": "pnpm --filter @agent-tower/desktop package:smoke",
     "build": "pnpm -r run build",
+    "test:provider-settings": "node scripts/provider-settings-test.mjs",
     "docs:dev": "pnpm --filter @agent-tower/docs-site dev",
     "docs:build": "pnpm --filter @agent-tower/docs-site build",
     "docs:serve": "pnpm --filter @agent-tower/docs-site serve",

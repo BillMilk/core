@@ -12,6 +12,8 @@ import {
 } from '../utils/process-launch.js';
 
 export const AGENT_SUBPROCESS_BLOCKED_ENV_KEYS = [
+  // Claude Code treats this marker as an unsupported nested launch.
+  'CLAUDECODE',
   'DATABASE_URL',
   'AGENT_TOWER_DATABASE_URL',
   'AGENT_TOWER_DATA_DIR',
@@ -42,6 +44,10 @@ const AGENT_SUBPROCESS_EXTERNAL_ENV_BLOCKED_KEYS = new Set<string>([
   ...AGENT_TOWER_MCP_SERVICE_ENV_KEYS,
 ]);
 
+export function isAgentSubprocessProtectedEnvKey(key: string): boolean {
+  return AGENT_SUBPROCESS_EXTERNAL_ENV_BLOCKED_KEYS.has(key);
+}
+
 const AGENT_SUBPROCESS_PARENT_ONLY_BLOCKED_ENV_KEYS = [
   'AGENT_TOWER_INTERNAL_TOKEN',
 ] as const;
@@ -49,7 +55,7 @@ const AGENT_SUBPROCESS_PARENT_ONLY_BLOCKED_ENV_KEYS = [
 export function filterAgentSubprocessExternalEnv(overrides: Record<string, string>): Record<string, string> {
   const filtered: Record<string, string> = {};
   for (const [key, value] of Object.entries(overrides)) {
-    if (!AGENT_SUBPROCESS_EXTERNAL_ENV_BLOCKED_KEYS.has(key)) {
+    if (!isAgentSubprocessProtectedEnvKey(key)) {
       filtered[key] = value;
     }
   }
@@ -71,6 +77,7 @@ export interface RepoContext {
  */
 export class ExecutionEnv {
   private vars: Map<string, string> = new Map();
+  private unsetVars: Set<string> = new Set();
   readonly repoContext: RepoContext;
   readonly commitReminder: boolean;
 
@@ -93,7 +100,15 @@ export class ExecutionEnv {
    * 插入环境变量
    */
   set(key: string, value: string): this {
+    this.unsetVars.delete(key);
     this.vars.set(key, value);
+    return this;
+  }
+
+  /** Explicitly prevent a variable from being inherited by the child process. */
+  unset(key: string): this {
+    this.vars.delete(key);
+    this.unsetVars.add(key);
     return this;
   }
 
@@ -116,7 +131,7 @@ export class ExecutionEnv {
    */
   merge(other: Record<string, string>): this {
     for (const [key, value] of Object.entries(other)) {
-      this.vars.set(key, value);
+      this.set(key, value);
     }
     return this;
   }
@@ -125,9 +140,10 @@ export class ExecutionEnv {
    * 应用 CmdOverrides 中的环境变量
    */
   withProfile(cmd?: CmdOverrides): ExecutionEnv {
-    if (cmd?.env) {
+    if (cmd?.env || cmd?.unsetEnv?.length) {
       const newEnv = this.clone();
-      newEnv.merge(filterAgentSubprocessExternalEnv(cmd.env));
+      for (const key of cmd.unsetEnv ?? []) newEnv.unset(key);
+      if (cmd.env) newEnv.merge(filterAgentSubprocessExternalEnv(cmd.env));
       return newEnv;
     }
     return this;
@@ -141,6 +157,7 @@ export class ExecutionEnv {
     for (const [key, value] of this.vars) {
       newEnv.vars.set(key, value);
     }
+    for (const key of this.unsetVars) newEnv.unsetVars.add(key);
     return newEnv;
   }
 
@@ -175,6 +192,8 @@ export class ExecutionEnv {
       Object.assign(env, withUnixUserPathFallbacks(parentEnv, process.platform));
     }
 
+    for (const key of this.unsetVars) delete env[key];
+
     // 如果 provider 设置了任何 ANTHROPIC_* 变量，先清除 process.env 中所有 ANTHROPIC_* 残留
     // 再用 provider 的值覆盖，确保不会混用不同 provider 的认证信息
     if (hasProviderAnthropicVars) {
@@ -194,8 +213,6 @@ export class ExecutionEnv {
 
     Object.assign(env, providerVars);
 
-    // Claude Code 检测 CLAUDECODE 环境变量来阻止嵌套启动
-    delete env.CLAUDECODE;
     for (const key of AGENT_SUBPROCESS_BLOCKED_ENV_KEYS) {
       delete env[key];
     }

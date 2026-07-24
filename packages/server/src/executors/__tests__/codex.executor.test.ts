@@ -10,14 +10,40 @@ import {
   getCachedCodexMcpServerNames,
   resetCodexMcpServerCache,
   waitForCodexMcpServerCacheRefresh,
+  CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID,
+  getCodexPermissionMode,
 } from '../codex.executor.js';
-import { ExecutionEnv } from '../execution-env.js';
+import {
+  AGENT_SUBPROCESS_BLOCKED_ENV_KEYS,
+  AGENT_TOWER_MCP_IDENTITY_ENV_KEYS,
+  AGENT_TOWER_MCP_SERVICE_ENV_KEYS,
+  ExecutionEnv,
+} from '../execution-env.js';
+import { getExecutorByProvider } from '../index.js';
+import { createProvider, reloadProviders, updateProvider } from '../providers.js';
+import type { BaseExecutor } from '../base.executor.js';
+import type { CmdOverrides, CommandBuilder } from '../command-builder.js';
+import { AgentType } from '../../types/index.js';
+import { CODEX_NATIVE_MODEL_PROVIDER_IDS } from '@agent-tower/shared';
+import {
+  probeEffectiveProviderConnection,
+  resolveEffectiveProviderConnection,
+} from '../../services/provider-effective-connection.service.js';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-executor-test-'));
 afterAll(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
+const protectedSubprocessEnvKeys = [
+  ...AGENT_SUBPROCESS_BLOCKED_ENV_KEYS,
+  ...AGENT_TOWER_MCP_IDENTITY_ENV_KEYS,
+  ...AGENT_TOWER_MCP_SERVICE_ENV_KEYS,
+];
+
 const savedCodexHome = process.env.CODEX_HOME;
 const savedPath = process.env.PATH;
+const savedDataDir = process.env.AGENT_TOWER_DATA_DIR;
+const savedCodexApiKey = process.env.CODEX_API_KEY;
+const savedOpenAiBaseUrl = process.env.OPENAI_BASE_URL;
 beforeEach(() => {
   resetCodexMcpServerCache();
 });
@@ -25,6 +51,467 @@ afterEach(() => {
   if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = savedCodexHome;
   process.env.PATH = savedPath;
+  if (savedDataDir === undefined) delete process.env.AGENT_TOWER_DATA_DIR;
+  else process.env.AGENT_TOWER_DATA_DIR = savedDataDir;
+  if (savedCodexApiKey === undefined) delete process.env.CODEX_API_KEY;
+  else process.env.CODEX_API_KEY = savedCodexApiKey;
+  if (savedOpenAiBaseUrl === undefined) delete process.env.OPENAI_BASE_URL;
+  else process.env.OPENAI_BASE_URL = savedOpenAiBaseUrl;
+});
+
+function inspectRuntime(executor: BaseExecutor, sessionEnv: Record<string, string> = {}) {
+  const inspectable = executor as unknown as {
+    buildCommandBuilder(): CommandBuilder;
+    cmdOverrides?: CmdOverrides;
+  };
+  const args = inspectable.buildCommandBuilder().buildInitial().args;
+  const env = ExecutionEnv.default(tmpDir)
+    .merge(sessionEnv)
+    .withProfile(inspectable.cmdOverrides)
+    .getFullEnv();
+  return { args, env };
+}
+
+describe('Codex Provider runtime connection snapshots', () => {
+  let providerDataDir = '';
+
+  beforeEach(() => {
+    providerDataDir = fs.mkdtempSync(path.join(tmpDir, 'provider-runtime-'));
+    process.env.AGENT_TOWER_DATA_DIR = providerDataDir;
+    process.env.CODEX_API_KEY = 'parent-codex-sentinel';
+    process.env.OPENAI_BASE_URL = 'https://parent-legacy.example';
+    reloadProviders();
+  });
+
+  afterEach(() => {
+    fs.rmSync(providerDataDir, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['false', false],
+    ['string true', 'true'],
+    ['number one', 1],
+    ['null', null],
+  ])('uses noninteractive workspace mode for %s permission values', (_label, value) => {
+    expect(getCodexPermissionMode({
+      dangerouslyBypassApprovalsAndSandbox: value as never,
+    })).toBe('noninteractive-workspace');
+
+    const provider = createProvider({
+      name: `Codex safe mode ${String(value)}`,
+      agentType: AgentType.CODEX,
+      env: {},
+      config: value === undefined ? {} : { dangerouslyBypassApprovalsAndSandbox: value },
+      settings: '',
+      isDefault: false,
+    });
+    const runtime = inspectRuntime(getExecutorByProvider(provider.id)!);
+
+    expect(runtime.args).toEqual(expect.arrayContaining([
+      '-c',
+      'approval_policy=never',
+      '-c',
+      'sandbox_mode=workspace-write',
+    ]));
+    expect(runtime.args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+  });
+
+  it('uses full bypass only for strict boolean true and omits safe defaults', () => {
+    expect(getCodexPermissionMode({ dangerouslyBypassApprovalsAndSandbox: true })).toBe('full-bypass');
+    const provider = createProvider({
+      name: 'Codex full bypass',
+      agentType: AgentType.CODEX,
+      env: {},
+      config: { dangerouslyBypassApprovalsAndSandbox: true },
+      settings: '',
+      isDefault: false,
+    });
+    const runtime = inspectRuntime(getExecutorByProvider(provider.id)!);
+
+    expect(runtime.args).toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(runtime.args).not.toContain('approval_policy=never');
+    expect(runtime.args).not.toContain('sandbox_mode=workspace-write');
+  });
+
+  it('keeps legacy fullAuto providers on the safe default mode', () => {
+    const provider = createProvider({
+      name: 'Codex legacy fullAuto',
+      agentType: AgentType.CODEX,
+      env: {},
+      config: { fullAuto: true },
+      settings: '',
+      isDefault: false,
+    });
+    const runtime = inspectRuntime(getExecutorByProvider(provider.id)!);
+
+    expect(runtime.args).toEqual(expect.arrayContaining([
+      'approval_policy=never',
+      'sandbox_mode=workspace-write',
+    ]));
+    expect(runtime.args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+  });
+
+  it('uses safe defaults for the built-in Codex provider', () => {
+    const runtime = inspectRuntime(getExecutorByProvider('codex-default')!);
+
+    expect(runtime.args).toEqual(expect.arrayContaining([
+      'approval_policy=never',
+      'sandbox_mode=workspace-write',
+    ]));
+    expect(runtime.args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+  });
+
+  it.each([
+    [AgentType.CLAUDE_CODE, { dangerouslySkipPermissions: true }],
+    [AgentType.GEMINI_CLI, { yolo: true }],
+    [AgentType.CURSOR_AGENT, { force: true }],
+  ] as const)('does not project Codex permission flags for %s', (agentType, config) => {
+    const provider = createProvider({
+      name: `${agentType} permission isolation`,
+      agentType,
+      env: {},
+      config,
+      settings: '',
+      isDefault: false,
+    });
+    const runtime = inspectRuntime(getExecutorByProvider(provider.id)!);
+
+    expect(runtime.args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(runtime.args).not.toContain('approval_policy=never');
+    expect(runtime.args).not.toContain('sandbox_mode=workspace-write');
+  });
+
+  it('uses saved connection A for the existing executor and connection B for the next spawn factory lookup', () => {
+    const keyA = 'runtime-key-a-sentinel';
+    const keyB = 'runtime-key-b-sentinel';
+    const provider = createProvider({
+      name: 'Codex Runtime Snapshot',
+      agentType: AgentType.CODEX,
+      env: { OPENAI_API_KEY: keyA, OPENAI_BASE_URL: 'https://legacy-ignored.example' },
+      config: {},
+      settings: 'openai_base_url = "https://runtime-a.example/v1"\n',
+      isDefault: false,
+    });
+
+    const executorA = getExecutorByProvider(provider.id)!;
+    const runtimeA = inspectRuntime(executorA, { OPENAI_BASE_URL: 'https://session-old.example' });
+    expect(runtimeA.args).toContain('model_provider="openai"');
+    expect(runtimeA.args).toContain('openai_base_url="https://runtime-a.example/v1"');
+    expect(runtimeA.env.CODEX_API_KEY === keyA).toBe(true);
+    expect(runtimeA.env).not.toHaveProperty('OPENAI_BASE_URL');
+    expect(JSON.stringify(runtimeA.args)).not.toContain(keyA);
+    expect(runtimeA.args.some(arg => arg.includes('supports_websockets'))).toBe(false);
+    expect(runtimeA.args).not.toContain(`model_provider="${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}"`);
+
+    updateProvider(provider.id, {
+      env: { OPENAI_API_KEY: keyB },
+      config: { disableResponsesWebsocket: true },
+      settings: 'openai_base_url = "https://runtime-b.example/v1"\n',
+    });
+    const executorB = getExecutorByProvider(provider.id)!;
+    const runtimeB = inspectRuntime(executorB, { OPENAI_BASE_URL: 'https://session-old.example' });
+    expect(runtimeB.args).toContain('openai_base_url="https://runtime-b.example/v1"');
+    expect(runtimeB.env.CODEX_API_KEY === keyB).toBe(true);
+    expect(runtimeB.env.CODEX_API_KEY === process.env.CODEX_API_KEY).toBe(false);
+    expect(runtimeB.args).toEqual(expect.arrayContaining([
+      `model_providers.${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}.name="OpenAI"`,
+      `model_providers.${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}.base_url="https://runtime-b.example/v1"`,
+      `model_providers.${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}.wire_api="responses"`,
+      `model_providers.${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}.requires_openai_auth=true`,
+      `model_providers.${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}.supports_websockets=false`,
+      `model_provider="${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}"`,
+    ]));
+    expect(runtimeB.args.at(-1)).toBe(`model_provider="${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}"`);
+
+    const oldSnapshot = inspectRuntime(executorA);
+    expect(oldSnapshot.args).toContain('openai_base_url="https://runtime-a.example/v1"');
+    expect(oldSnapshot.env.CODEX_API_KEY === keyA).toBe(true);
+    expect(oldSnapshot.args.some(arg => arg.includes('supports_websockets'))).toBe(false);
+  });
+
+  it('keeps explicit false byte-for-byte equivalent to a missing transport control', () => {
+    const baseProvider = {
+      name: 'Codex transport default',
+      agentType: AgentType.CODEX,
+      env: {},
+      settings: 'openai_base_url = "https://runtime-default.example/v1"\n',
+      isDefault: false,
+    };
+    const missing = createProvider({ ...baseProvider, config: {} });
+    const explicitFalse = createProvider({
+      ...baseProvider,
+      name: 'Codex transport explicit false',
+      config: { disableResponsesWebsocket: false },
+    });
+
+    expect(inspectRuntime(getExecutorByProvider(explicitFalse.id)!).args)
+      .toEqual(inspectRuntime(getExecutorByProvider(missing.id)!).args);
+  });
+
+  it('does not enable transport overrides for a non-boolean historical value', () => {
+    const provider = createProvider({
+      name: 'Codex transport historical string false',
+      agentType: AgentType.CODEX,
+      env: {},
+      config: { disableResponsesWebsocket: 'false' },
+      settings: 'openai_base_url = "https://runtime-historical.example/v1"\n',
+      isDefault: false,
+    });
+
+    const runtime = inspectRuntime(getExecutorByProvider(provider.id)!);
+    expect(runtime.args.some(arg => arg.includes('supports_websockets'))).toBe(false);
+    expect(runtime.args).not.toContain(`model_provider="${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}"`);
+  });
+
+  it('uses a custom env_key and masks inherited CODEX_API_KEY for a custom model provider', () => {
+    const customKey = 'runtime-custom-sentinel';
+    const provider = createProvider({
+      name: 'Codex Custom Runtime',
+      agentType: AgentType.CODEX,
+      env: { PROXY_TOKEN: customKey, CODEX_API_KEY: 'provider-stale-codex-sentinel' },
+      config: { disableResponsesWebsocket: true },
+      settings: [
+        'model_provider = "proxy"',
+        '[model_providers.proxy]',
+        'base_url = "https://custom-runtime.example/v1"',
+        'env_key = "PROXY_TOKEN"',
+        'supports_websockets = true',
+      ].join('\n'),
+      isDefault: false,
+    });
+
+    const runtime = inspectRuntime(getExecutorByProvider(provider.id)!);
+    expect(runtime.args).toContain('model_provider="proxy"');
+    expect(runtime.args).toContain('model_providers.proxy.base_url="https://custom-runtime.example/v1"');
+    expect(runtime.args).toContain('model_providers.proxy.env_key="PROXY_TOKEN"');
+    expect(runtime.args.filter(arg => arg === 'model_providers.proxy.supports_websockets=true')).toHaveLength(1);
+    expect(runtime.args.filter(arg => arg === 'model_providers.proxy.supports_websockets=false')).toHaveLength(1);
+    expect(runtime.args.at(-1)).toBe('model_providers.proxy.supports_websockets=false');
+    expect(runtime.env.PROXY_TOKEN === customKey).toBe(true);
+    expect(runtime.env).not.toHaveProperty('CODEX_API_KEY');
+    expect(JSON.stringify(runtime.args)).not.toContain(customKey);
+  });
+
+  it('projects a legacy OpenAI URL through the fixed HTTP-only alias without exposing the key', () => {
+    const key = 'legacy-runtime-key-sentinel';
+    const provider = createProvider({
+      name: 'Codex Legacy HTTP-only',
+      agentType: AgentType.CODEX,
+      env: {
+        OPENAI_API_KEY: key,
+        OPENAI_BASE_URL: 'https://legacy-runtime.example/v1',
+      },
+      config: { disableResponsesWebsocket: true },
+      settings: '',
+      isDefault: false,
+    });
+
+    const runtime = inspectRuntime(getExecutorByProvider(provider.id)!);
+    expect(runtime.args).toContain(
+      `model_providers.${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}.base_url="https://legacy-runtime.example/v1"`,
+    );
+    expect(runtime.args).toContain(
+      `model_providers.${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}.supports_websockets=false`,
+    );
+    expect(runtime.args.at(-1)).toBe(`model_provider="${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}"`);
+    expect(runtime.env.CODEX_API_KEY === key).toBe(true);
+    expect(runtime.env).not.toHaveProperty('OPENAI_BASE_URL');
+    expect(JSON.stringify(runtime.args)).not.toContain(key);
+  });
+
+  it('fails clearly when raw settings already declare the reserved built-in alias', () => {
+    const provider = createProvider({
+      name: 'Codex Reserved Alias Collision',
+      agentType: AgentType.CODEX,
+      env: { OPENAI_API_KEY: 'alias-collision-key-sentinel' },
+      config: { disableResponsesWebsocket: true },
+      settings: [
+        'model_provider = "openai"',
+        '[model_providers.agent-tower-openai-http]',
+        'name = "User alias"',
+        'env_key = "STALE_ALIAS_KEY"',
+      ].join('\n'),
+      isDefault: false,
+    });
+
+    expect(() => inspectRuntime(getExecutorByProvider(provider.id)!)).toThrow(
+      "disableResponsesWebsocket conflicts with reserved Codex model provider alias 'agent-tower-openai-http'",
+    );
+  });
+
+  it('uses the same HTTP-only override for initial and follow-up command paths', async () => {
+    const binDir = createFakeCodex('spawn-transport-paths', '[]');
+    process.env.PATH = `${binDir}${path.delimiter}${savedPath ?? ''}`;
+    const provider = createProvider({
+      name: 'Codex Custom Spawn Paths',
+      agentType: AgentType.CODEX,
+      env: { PROXY_TOKEN: 'spawn-path-key-sentinel' },
+      config: { disableResponsesWebsocket: true },
+      settings: [
+        'model_provider = "proxy"',
+        '[model_providers.proxy]',
+        'base_url = "https://spawn-path.example/v1"',
+        'env_key = "PROXY_TOKEN"',
+      ].join('\n'),
+      isDefault: false,
+    });
+    const executor = getExecutorByProvider(provider.id)!;
+    const spawnWithStdin = vi.spyOn(
+      executor as unknown as { spawnWithStdin: (...args: unknown[]) => Promise<unknown> },
+      'spawnWithStdin',
+    ).mockResolvedValue({ pid: 1 });
+    const spawnConfig = {
+      workingDir: tmpDir,
+      prompt: 'synthetic prompt',
+      env: ExecutionEnv.default(tmpDir),
+    };
+
+    await executor.spawn(spawnConfig);
+    await executor.spawnFollowUp!(spawnConfig, 'codex-thread-1');
+
+    expect(spawnWithStdin).toHaveBeenCalledTimes(2);
+    const initialArgs = (spawnWithStdin.mock.calls[0]![1] as { args: string[] }).args;
+    const followUpArgs = (spawnWithStdin.mock.calls[1]![1] as { args: string[] }).args;
+    for (const args of [initialArgs, followUpArgs]) {
+      expect(args.filter(arg => arg === 'model_providers.proxy.supports_websockets=false'))
+        .toHaveLength(1);
+      expect(JSON.stringify(args)).not.toContain('spawn-path-key-sentinel');
+    }
+    expect(initialArgs).toEqual(expect.arrayContaining(['exec', '--json', '--skip-git-repo-check', '-']));
+    expect(followUpArgs).toEqual(expect.arrayContaining([
+      'exec', 'resume', '--json', '--skip-git-repo-check', 'codex-thread-1', '-',
+    ]));
+    await waitForCodexMcpServerCacheRefresh();
+  });
+
+  it('keeps a custom credential when env_key collides with the legacy OPENAI_BASE_URL name', async () => {
+    const keyA = 'runtime-collision-a-sentinel';
+    const keyB = 'runtime-collision-b-sentinel';
+    const provider = createProvider({
+      name: 'Codex Custom Legacy Env Collision',
+      agentType: AgentType.CODEX,
+      env: { OPENAI_BASE_URL: keyA, CODEX_API_KEY: 'provider-stale-codex-sentinel' },
+      config: {},
+      settings: [
+        'model_provider = "proxy"',
+        '[model_providers.proxy]',
+        'base_url = "https://custom-collision.example/v1"',
+        'env_key = "OPENAI_BASE_URL"',
+      ].join('\n'),
+      isDefault: false,
+    });
+
+    const effectiveA = resolveEffectiveProviderConnection(provider);
+    let probeUsedKeyA = false;
+    const probeA = await probeEffectiveProviderConnection(effectiveA, {
+      fetchImpl: (async (_input, init) => {
+        probeUsedKeyA = new Headers(init?.headers).get('authorization') === `Bearer ${keyA}`;
+        return new Response(null, { status: 200 });
+      }) as typeof fetch,
+    });
+    const executorA = getExecutorByProvider(provider.id)!;
+    const runtimeA = inspectRuntime(executorA, { OPENAI_BASE_URL: 'session-stale-legacy-sentinel' });
+
+    expect(effectiveA.envKey).toBe('OPENAI_BASE_URL');
+    expect(effectiveA.secret === keyA).toBe(true);
+    expect(probeA.ok).toBe(true);
+    expect(probeUsedKeyA).toBe(true);
+    expect(runtimeA.args).toContain('model_providers.proxy.env_key="OPENAI_BASE_URL"');
+    expect(runtimeA.env.OPENAI_BASE_URL === keyA).toBe(true);
+    expect(runtimeA.env).not.toHaveProperty('CODEX_API_KEY');
+    expect(JSON.stringify(runtimeA.args)).not.toContain(keyA);
+    expect(JSON.stringify(probeA)).not.toContain(keyA);
+
+    const updated = updateProvider(provider.id, {
+      env: { OPENAI_BASE_URL: keyB },
+    });
+    const effectiveB = resolveEffectiveProviderConnection(updated!);
+    let probeUsedKeyB = false;
+    const probeB = await probeEffectiveProviderConnection(effectiveB, {
+      fetchImpl: (async (_input, init) => {
+        probeUsedKeyB = new Headers(init?.headers).get('authorization') === `Bearer ${keyB}`;
+        return new Response(null, { status: 200 });
+      }) as typeof fetch,
+    });
+    const executorB = getExecutorByProvider(provider.id)!;
+    const runtimeB = inspectRuntime(executorB, { OPENAI_BASE_URL: 'session-stale-legacy-sentinel' });
+    const oldSnapshot = inspectRuntime(executorA);
+
+    expect(effectiveB.secret === keyB).toBe(true);
+    expect(probeB.ok).toBe(true);
+    expect(probeUsedKeyB).toBe(true);
+    expect(runtimeB.env.OPENAI_BASE_URL === keyB).toBe(true);
+    expect(runtimeB.env.OPENAI_BASE_URL === process.env.OPENAI_BASE_URL).toBe(false);
+    expect(runtimeB.env).not.toHaveProperty('CODEX_API_KEY');
+    expect(oldSnapshot.env.OPENAI_BASE_URL === keyA).toBe(true);
+    expect(JSON.stringify(runtimeB.args)).not.toContain(keyB);
+    expect(JSON.stringify(probeB)).not.toContain(keyB);
+  });
+
+  it.each(protectedSubprocessEnvKeys)(
+    'returns the same diagnostic and skips probe/spawn for protected env_key %s',
+    async envKey => {
+      const secret = 'protected-runtime-value-sentinel';
+      const provider = createProvider({
+        name: 'Codex Protected Runtime',
+        agentType: AgentType.CODEX,
+        env: { [envKey]: secret },
+        config: { disableResponsesWebsocket: true },
+        settings: [
+          'model_provider = "proxy"',
+          '[model_providers.proxy]',
+          'base_url = "https://protected-runtime.example/v1"',
+          `env_key = ${JSON.stringify(envKey)}`,
+        ].join('\n'),
+        isDefault: false,
+      });
+      const expectedDiagnostic = {
+        field: 'apiKey' as const,
+        code: 'CONFLICT' as const,
+        message: 'Active Codex env_key is reserved for Agent Tower subprocess internals',
+      };
+      const connection = resolveEffectiveProviderConnection(provider);
+      const fetchImpl = vi.fn() as unknown as typeof fetch;
+      const probe = await probeEffectiveProviderConnection(connection, { fetchImpl });
+
+      expect(connection.diagnostics).toEqual([expectedDiagnostic]);
+      expect(connection.secret).toBeUndefined();
+      expect(probe).toMatchObject({
+        ok: false,
+        stage: 'validation',
+        diagnostics: [expectedDiagnostic],
+      });
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(() => getExecutorByProvider(provider.id)).toThrow(expectedDiagnostic.message);
+      expect(JSON.stringify(probe).includes(secret)).toBe(false);
+      expect(expectedDiagnostic.message.includes(secret)).toBe(false);
+    },
+  );
+
+  it.each(CODEX_NATIVE_MODEL_PROVIDER_IDS)(
+    'keeps the native %s provider on the CLI path when the transport control is enabled',
+    modelProviderId => {
+      const provider = createProvider({
+        name: `Codex native ${modelProviderId}`,
+        agentType: AgentType.CODEX,
+        env: { NATIVE_PROVIDER_OPTION: 'native-value' },
+        config: { disableResponsesWebsocket: true },
+        settings: `model_provider = "${modelProviderId}"\n`,
+        isDefault: false,
+      });
+
+      const runtime = inspectRuntime(getExecutorByProvider(provider.id)!);
+      expect(runtime.args.filter(arg => arg === `model_provider="${modelProviderId}"`)).toHaveLength(1);
+      expect(runtime.args.some(arg => arg.startsWith('openai_base_url='))).toBe(false);
+      expect(runtime.args.some(arg => arg.startsWith(`model_providers.${modelProviderId}.`))).toBe(false);
+      expect(runtime.args.some(arg => arg.includes('supports_websockets'))).toBe(false);
+      expect(runtime.args).not.toContain(`model_provider="${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}"`);
+      expect(runtime.env.NATIVE_PROVIDER_OPTION).toBe('native-value');
+      expect(runtime.env.CODEX_API_KEY).toBe('parent-codex-sentinel');
+      expect(runtime.env.OPENAI_BASE_URL).toBe('https://parent-legacy.example');
+    },
+  );
 });
 
 /**

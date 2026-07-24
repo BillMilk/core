@@ -43,6 +43,10 @@ Codex `exec --json` 的成功 `turn.completed` 是逻辑完成边界，不必继
 
 Provider 是主要配置入口，profiles 只保留兼容。Executor factory 根据 `AgentType` 和 provider config 动态创建实例。
 
+Provider 显式连接凭证必须在每次 spawn 时从当前 Provider 重新解析，并通过单次 executor 环境投影。投影时显式覆盖或屏蔽父进程中会抢优先级的旧认证变量；运行中的 child 保持启动快照，不热更新 env/args。
+
+自定义 Provider 的动态 credential `env_key` 不得使用 ExecutionEnv 已保护的 Agent Tower subprocess、TeamRun/MCP identity 或 service env 名；resolver/normalization 必须在 probe/save/spawn 前返回字段诊断，不能放宽子进程环境过滤来允许覆盖内部变量。
+
 ## Parser 与 MsgStore
 
 Claude Code、Cursor Agent、Codex 有结构化 parser；Gemini 当前保留 raw stdout。Parser 缓冲不完整 frame，使用 `output/utils/patch.ts` 生成 RFC 6902 patch，并在 finish 处理残留数据。不要按任意 PTY chunk 直接 `JSON.parse`，未知或坏 frame 不能阻断后续输出。

@@ -1,19 +1,10 @@
-/**
- * Provider CRUD API
- *
- * GET    /api/providers                — 获取所有 providers（带可用性检查）
- * GET    /api/providers/backup         — 导出 Provider 备份（仅用户层配置）
- * POST   /api/providers/import/preview — 预览导入结果
- * POST   /api/providers/import         — 执行导入
- * GET    /api/providers/:id            — 获取单个 provider 详情
- * POST   /api/providers                — 创建 provider
- * PUT    /api/providers/:id            — 更新 provider
- * DELETE /api/providers/:id            — 删除 provider
- * POST   /api/providers/reload         — 重新加载配置
- */
-
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import {
+  AgentType as SharedAgentType,
+  PROVIDER_CAPABILITIES,
+  type ProviderDraftInput,
+} from '@agent-tower/shared';
 import {
   getProviderById,
   createProviderBackup,
@@ -25,24 +16,69 @@ import {
   canDeleteProvider,
   reloadProviders,
   getAllProvidersAvailability,
+  smokeTestProviderConfiguration,
 } from '../executors/index.js';
 import { AgentType } from '../types/index.js';
+import {
+  getProviderSecretValues,
+  normalizeProviderDraft,
+  redactProvider,
+  validateProviderBackupDrafts,
+} from '../services/provider-config.service.js';
+import {
+  probeEffectiveProviderConnection,
+  resolveEffectiveProviderConnection,
+  type ProviderConnectionProbeOptions,
+} from '../services/provider-effective-connection.service.js';
+
+export interface ProviderRoutesOptions {
+  connectionProbe?: ProviderConnectionProbeOptions;
+}
+
+const secretWriteSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('keep') }),
+  z.object({ action: z.literal('replace'), value: z.string() }),
+  z.object({ action: z.literal('clear') }),
+]);
+
+const simplifiedSchema = z.object({
+  apiBaseUrl: z.string().optional(),
+  apiKey: z.object({
+    configured: z.boolean(),
+    envKey: z.string().min(1),
+  }).optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+});
+
+const conflictResolutionsSchema = z.record(
+  z.enum(['apiBaseUrl', 'apiKey', 'model', 'reasoningEffort']),
+  z.enum(['simple', 'advanced']),
+);
 
 const createProviderSchema = z.object({
-  name: z.string().min(1),
+  name: z.string(),
   agentType: z.nativeEnum(AgentType),
-  env: z.record(z.string()).default({}),
+  env: z.record(secretWriteSchema).default({}),
   config: z.record(z.unknown()).default({}),
   settings: z.string().optional(),
+  simplified: simplifiedSchema.optional(),
+  conflictResolutions: conflictResolutionsSchema.optional(),
   isDefault: z.boolean().default(false),
 });
 
 const updateProviderSchema = z.object({
-  name: z.string().min(1).optional(),
-  env: z.record(z.string()).optional(),
+  name: z.string().optional(),
+  env: z.record(secretWriteSchema).optional(),
   config: z.record(z.unknown()).optional(),
   settings: z.string().optional(),
+  simplified: simplifiedSchema.optional(),
+  conflictResolutions: conflictResolutionsSchema.optional(),
   isDefault: z.boolean().optional(),
+});
+
+const testProviderSchema = createProviderSchema.extend({
+  providerId: z.string().min(1).optional(),
 });
 
 const backupProviderSchema = z.object({
@@ -64,7 +100,6 @@ const providerBackupSchema = z.object({
   providers: z.array(backupProviderSchema),
 }).superRefine((backup, ctx) => {
   const seenIds = new Set<string>();
-
   backup.providers.forEach((provider, index) => {
     if (seenIds.has(provider.id)) {
       ctx.addIssue({
@@ -72,7 +107,6 @@ const providerBackupSchema = z.object({
         message: `Duplicate provider id in backup: ${provider.id}`,
         path: ['providers', index, 'id'],
       });
-      return;
     }
     seenIds.add(provider.id);
   });
@@ -80,118 +114,215 @@ const providerBackupSchema = z.object({
 
 function parseBackupPayload(body: unknown) {
   const result = providerBackupSchema.safeParse(body);
-  if (!result.success) {
-    const message = result.error.issues[0]?.message ?? 'Invalid provider backup payload';
-    throw new Error(message);
-  }
+  if (!result.success) throw new Error(result.error.issues[0]?.message ?? 'Invalid provider backup payload');
   return result.data;
 }
 
-export async function providerRoutes(app: FastifyInstance) {
-  // 获取所有 providers（带可用性检查）
+function redactError(error: unknown, secrets: string[] = []): string {
+  let message = error instanceof Error ? error.message : String(error);
+  for (const secret of secrets) {
+    if (secret) message = message.split(secret).join('[redacted]');
+  }
+  return message;
+}
+
+function persistedData(provider: ReturnType<typeof normalizeProviderDraft>['provider']) {
+  const { id: _id, builtIn: _builtIn, createdAt: _createdAt, ...data } = provider;
+  return data;
+}
+
+function draftSecrets(input: ProviderDraftInput): string[] {
+  return Object.values(input.env ?? {}).flatMap(write => write.action === 'replace' ? [write.value] : []);
+}
+
+export async function providerRoutes(app: FastifyInstance, options: ProviderRoutesOptions = {}) {
   app.get('/providers', async () => {
     const providersWithAvailability = await getAllProvidersAvailability();
     return providersWithAvailability.map(item => ({
       ...item,
-      provider: {
-        ...item.provider,
-        deletable: canDeleteProvider(item.provider),
-      },
+      provider: redactProvider(item.provider, canDeleteProvider(item.provider)),
     }));
   });
 
-  // 导出 Provider 备份（仅用户层配置）
-  app.get('/providers/backup', async () => {
-    return createProviderBackup();
+  app.get('/providers/capabilities', async () => PROVIDER_CAPABILITIES);
+
+  app.post('/providers/test', async (request, reply) => {
+    const parsed = testProviderSchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return { ok: false, stage: 'validation', summary: parsed.error.issues[0]?.message ?? 'Invalid draft' };
+    }
+    const input = parsed.data as ProviderDraftInput;
+    const existing = input.providerId ? getProviderById(input.providerId) : null;
+    if (input.providerId && !existing) {
+      reply.code(404);
+      return { ok: false, stage: 'validation', summary: 'Provider not found' };
+    }
+    const { provider, diagnostics } = normalizeProviderDraft(input, existing);
+    if (diagnostics.length > 0) {
+      return { ok: false, stage: 'validation', summary: 'Configuration validation failed', diagnostics };
+    }
+    const connection = resolveEffectiveProviderConnection(provider);
+    if (connection.diagnostics.length > 0) {
+      return {
+        ok: false,
+        stage: 'validation',
+        summary: 'Configuration validation failed',
+        diagnostics: connection.diagnostics,
+      };
+    }
+    if (connection.protocol && connection.baseUrl) {
+      const [result, availability] = await Promise.all([
+        probeEffectiveProviderConnection(connection, options.connectionProbe),
+        smokeTestProviderConfiguration(provider)
+          .then(smokeTest => smokeTest.availability.type)
+          .catch(() => undefined),
+      ]);
+      return availability ? { ...result, availability } : result;
+    }
+    try {
+      const { availability } = await smokeTestProviderConfiguration(provider);
+      if (availability.type === 'NOT_FOUND') {
+        return {
+          ok: false,
+          stage: 'availability',
+          summary: redactError(availability.error ?? 'CLI is not available', getProviderSecretValues(provider)),
+          availability: availability.type,
+        };
+      }
+      const result = await probeEffectiveProviderConnection(
+        connection,
+        options.connectionProbe,
+      );
+      return { ...result, availability: availability.type };
+    } catch (error) {
+      return {
+        ok: false,
+        stage: 'command',
+        summary: redactError(error, getProviderSecretValues(provider)),
+      };
+    }
   });
 
-  // 预览导入结果
+  app.get('/providers/backup', async () => createProviderBackup());
+
   app.post('/providers/import/preview', async (request, reply) => {
     try {
       const backup = parseBackupPayload(request.body);
-      return previewProviderImport(backup);
-    } catch (e) {
+      const diagnostics = validateProviderBackupDrafts(backup);
+      if (diagnostics.length > 0) {
+        reply.code(400);
+        return { message: 'Invalid provider backup', diagnostics };
+      }
+      const preview = previewProviderImport(backup);
+      return {
+        ...preview,
+        items: preview.items.map(item => ({
+          ...item,
+          incoming: redactProvider(item.incoming),
+          existing: item.existing ? redactProvider(item.existing) : item.existing,
+        })),
+      };
+    } catch (error) {
       reply.code(400);
-      return { message: e instanceof Error ? e.message : 'Failed to preview provider import' };
+      return { message: redactError(error) };
     }
   });
 
-  // 执行导入
   app.post('/providers/import', async (request, reply) => {
     try {
       const backup = parseBackupPayload(request.body);
-      return importProvidersFromBackup(backup);
-    } catch (e) {
+      const diagnostics = validateProviderBackupDrafts(backup);
+      if (diagnostics.length > 0) {
+        reply.code(400);
+        return { message: 'Invalid provider backup', diagnostics };
+      }
+      const result = importProvidersFromBackup(backup);
+      return { ...result, providers: result.providers.map(provider => redactProvider(provider)) };
+    } catch (error) {
       reply.code(400);
-      return { message: e instanceof Error ? e.message : 'Failed to import providers' };
+      return { message: redactError(error) };
     }
   });
 
-  // 获取单个 provider 详情
-  app.get<{ Params: { id: string } }>(
-    '/providers/:id',
-    async (request, reply) => {
-      const provider = getProviderById(request.params.id);
-      if (!provider) {
+  app.get<{ Params: { id: string } }>('/providers/:id', async (request, reply) => {
+    const provider = getProviderById(request.params.id);
+    if (!provider) {
+      reply.code(404);
+      return { error: `Provider not found: ${request.params.id}` };
+    }
+    return redactProvider(provider, canDeleteProvider(provider));
+  });
+
+  app.post('/providers', async (request, reply) => {
+    const parsed = createProviderSchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return { error: 'Invalid provider configuration', diagnostics: parsed.error.issues };
+    }
+    const input = parsed.data as ProviderDraftInput;
+    const normalized = normalizeProviderDraft(input);
+    if (normalized.diagnostics.length > 0) {
+      reply.code(400);
+      return { error: 'Invalid provider configuration', diagnostics: normalized.diagnostics };
+    }
+    try {
+      const provider = createProvider(persistedData(normalized.provider));
+      reply.code(201);
+      return redactProvider(provider, canDeleteProvider(provider));
+    } catch (error) {
+      reply.code(400);
+      return { error: redactError(error, draftSecrets(input)) };
+    }
+  });
+
+  app.put<{ Params: { id: string } }>('/providers/:id', async (request, reply) => {
+    const parsed = updateProviderSchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return { error: 'Invalid provider configuration', diagnostics: parsed.error.issues };
+    }
+    const existing = getProviderById(request.params.id);
+    if (!existing) {
+      reply.code(404);
+      return { error: `Provider not found: ${request.params.id}` };
+    }
+    const input: ProviderDraftInput = {
+      ...parsed.data,
+      providerId: existing.id,
+      name: parsed.data.name ?? existing.name,
+      agentType: existing.agentType as SharedAgentType,
+    };
+    const normalized = normalizeProviderDraft(input, existing);
+    if (normalized.diagnostics.length > 0) {
+      reply.code(400);
+      return { error: 'Invalid provider configuration', diagnostics: normalized.diagnostics };
+    }
+    try {
+      const provider = updateProvider(existing.id, persistedData(normalized.provider));
+      return provider ? redactProvider(provider, canDeleteProvider(provider)) : null;
+    } catch (error) {
+      reply.code(400);
+      return { error: redactError(error, draftSecrets(input)) };
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>('/providers/:id', async (request, reply) => {
+    try {
+      const deleted = deleteProvider(request.params.id);
+      if (!deleted) {
         reply.code(404);
         return { error: `Provider not found: ${request.params.id}` };
       }
-      return {
-        ...provider,
-        deletable: canDeleteProvider(provider),
-      };
-    }
-  );
-
-  // 创建 provider
-  app.post('/providers', async (request, reply) => {
-    const body = createProviderSchema.parse(request.body);
-    try {
-      const provider = createProvider(body);
-      reply.code(201);
-      return provider;
-    } catch (e) {
+      return { success: true };
+    } catch (error) {
       reply.code(400);
-      return { error: e instanceof Error ? e.message : 'Failed to create provider' };
+      return { error: redactError(error) };
     }
   });
 
-  // 更新 provider
-  app.put<{ Params: { id: string } }>(
-    '/providers/:id',
-    async (request, reply) => {
-      const body = updateProviderSchema.parse(request.body);
-      try {
-        const provider = updateProvider(request.params.id, body);
-        return provider;
-      } catch (e) {
-        reply.code(400);
-        return { error: e instanceof Error ? e.message : 'Failed to update provider' };
-      }
-    }
-  );
-
-  // 删除 provider
-  app.delete<{ Params: { id: string } }>(
-    '/providers/:id',
-    async (request, reply) => {
-      try {
-        const deleted = deleteProvider(request.params.id);
-        if (!deleted) {
-          reply.code(404);
-          return { error: `Provider not found: ${request.params.id}` };
-        }
-        return { success: true };
-      } catch (e) {
-        reply.code(400);
-        return { error: e instanceof Error ? e.message : 'Failed to delete provider' };
-      }
-    }
-  );
-
-  // 重新加载配置
-  app.post('/providers/reload', async () => {
-    const providers = reloadProviders();
-    return { success: true, providers };
-  });
+  app.post('/providers/reload', async () => ({
+    success: true,
+    providers: reloadProviders().map(provider => redactProvider(provider)),
+  }));
 }

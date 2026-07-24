@@ -12,6 +12,7 @@ import { CursorAgentExecutor, type CursorAgentConfig } from './cursor-agent.exec
 import { CodexExecutor, type CodexConfig } from './codex.executor.js';
 import { getVariantConfig, type VariantConfig } from './profiles.js';
 import { getProviderById, getDefaultProvider, getAllProviders, type Provider } from './providers.js';
+import { resolveEffectiveProviderConnection } from '../services/provider-effective-connection.service.js';
 
 // ─── Executor Factory ────────────────────────────────────────────
 
@@ -97,16 +98,69 @@ export function getExecutorByAgentType(agentType: AgentType): BaseExecutor | und
  */
 function createExecutorFromProvider(provider: Provider): BaseExecutor {
   const agentType = provider.agentType as AgentType;
+  const env = { ...provider.env };
+  const unsetEnv: string[] = [];
+  let connection: CodexConfig['connection'];
+
+  if (agentType === AgentType.CODEX) {
+    const effective = resolveEffectiveProviderConnection(provider);
+    if (effective.diagnostics.length > 0) {
+      throw new Error(effective.diagnostics.map(diagnostic => diagnostic.message).join('; '));
+    }
+    if (
+      effective.providerKind !== 'built-in'
+      && effective.providerKind !== 'custom'
+      && effective.providerKind !== 'native'
+    ) {
+      throw new Error('Codex Provider connection could not be resolved');
+    }
+    if (effective.providerKind === 'built-in') {
+      delete env.OPENAI_BASE_URL;
+      unsetEnv.push('OPENAI_BASE_URL');
+      if (effective.secret) env.CODEX_API_KEY = effective.secret;
+    } else if (effective.providerKind === 'custom') {
+      delete env.OPENAI_BASE_URL;
+      unsetEnv.push('OPENAI_BASE_URL');
+      if (effective.envKey !== 'CODEX_API_KEY') delete env.CODEX_API_KEY;
+      unsetEnv.push('CODEX_API_KEY');
+      if (effective.envKey) {
+        unsetEnv.push(effective.envKey);
+        if (effective.secret !== undefined) env[effective.envKey] = effective.secret;
+      }
+    }
+    if (effective.providerKind !== 'native') {
+      connection = {
+        providerKind: effective.providerKind,
+        modelProviderId: effective.modelProviderId ?? 'openai',
+        baseUrl: effective.baseUrl,
+        envKey: effective.envKey,
+      };
+    }
+  }
   const config: VariantConfig = {
     ...provider.config,
     // 将 provider.env 注入到 cmd.env，这样会在 spawnInternal 时通过 withProfile 合并到环境变量
     cmd: {
-      env: provider.env,
+      env,
+      unsetEnv,
     },
     // CLI 原生配置（如 Claude Code 的 settings.json 覆盖）
     settings: provider.settings,
+    ...(connection ? { connection } : {}),
   };
   return createExecutor(agentType, config);
+}
+
+export async function smokeTestProviderConfiguration(provider: Provider): Promise<{
+  availability: AvailabilityInfo;
+}> {
+  const executor = createExecutorFromProvider(provider);
+  const availability = await executor.getAvailabilityInfo();
+  const commandCapableExecutor = executor as unknown as {
+    buildCommandBuilder(): { buildInitial(): { program: string; args: string[] } };
+  };
+  commandCapableExecutor.buildCommandBuilder().buildInitial();
+  return { availability };
 }
 
 /**
@@ -151,7 +205,11 @@ export async function getAllExecutorsAvailability(): Promise<
     availability: AvailabilityInfo;
   }>
 > {
-  const results = [];
+  const results: Array<{
+    agentType: AgentType;
+    displayName: string;
+    availability: AvailabilityInfo;
+  }> = [];
 
   for (const executor of getAllExecutors()) {
     const availability = await executor.getAvailabilityInfo();
@@ -175,7 +233,7 @@ export async function getAllProvidersAvailability(): Promise<
   }>
 > {
   const providers = getAllProviders();
-  const results = [];
+  const results: Array<{ provider: Provider; availability: AvailabilityInfo }> = [];
 
   // 缓存每种 agentType 的可用性结果，避免重复检查
   const availabilityCache = new Map<string, AvailabilityInfo>();
@@ -185,9 +243,17 @@ export async function getAllProvidersAvailability(): Promise<
     let availability = availabilityCache.get(agentType);
 
     if (!availability) {
-      const executor = createExecutorFromProvider(provider);
-      availability = await executor.getAvailabilityInfo();
-      availabilityCache.set(agentType, availability);
+      try {
+        const executor = createExecutorFromProvider(provider);
+        availability = await executor.getAvailabilityInfo();
+        availabilityCache.set(agentType, availability);
+      } catch {
+        results.push({
+          provider,
+          availability: { type: 'NOT_FOUND', error: 'Provider configuration is invalid' },
+        });
+        continue;
+      }
     }
 
     results.push({ provider, availability });

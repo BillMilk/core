@@ -17,6 +17,8 @@ export interface CmdOverrides {
   additionalParams?: string[];
   /** 环境变量 */
   env?: Record<string, string>;
+  /** 从父进程和 Session 环境中显式移除的变量；同一 profile 的 env 值优先。 */
+  unsetEnv?: string[];
 }
 
 export class CommandBuildError extends Error {

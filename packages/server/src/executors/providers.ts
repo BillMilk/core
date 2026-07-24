@@ -349,7 +349,13 @@ function saveProviders(providers: Provider[]): void {
   }
 
   const data: ProvidersData = { providers: userProviders };
-  fs.writeFileSync(userPath, JSON.stringify(data, null, 2), 'utf-8');
+  const tempPath = `${userPath}.tmp`;
+  const backupPath = `${userPath}.bak`;
+  if (fs.existsSync(userPath)) {
+    fs.copyFileSync(userPath, backupPath);
+  }
+  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf-8');
+  fs.renameSync(tempPath, userPath);
 
   // 更新缓存
   cachedProviders = providers;

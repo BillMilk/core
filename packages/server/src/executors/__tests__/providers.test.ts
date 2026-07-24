@@ -156,6 +156,30 @@ describe('providers backup/import', () => {
     expect(providers.find(provider => provider.id === 'same-provider')?.name).toBe('Same Provider');
   });
 
+  it('imports Codex native provider settings byte-for-byte without requiring a custom table', () => {
+    const settings = '# native settings\nmodel_provider = "ollama"\nmodel = "local-model"\n';
+    const backup: ProviderBackupFile = {
+      version: 1,
+      kind: 'provider-backup',
+      exportedAt: '2026-07-15T00:00:00.000Z',
+      mode: 'full',
+      providers: [{
+        id: 'native-codex-import',
+        name: 'Native Codex Import',
+        agentType: AgentType.CODEX,
+        env: { OLLAMA_HOST: 'http://localhost:11434' },
+        config: { model: 'local-model' },
+        settings,
+        isDefault: false,
+      }],
+    };
+
+    expect(importProvidersFromBackup(backup).summary.create).toBe(1);
+    const imported = getAllProviders().find(item => item.id === 'native-codex-import');
+    expect(imported?.settings).toBe(settings);
+    expect(imported?.env).toEqual({ OLLAMA_HOST: 'http://localhost:11434' });
+  });
+
   it('deletes a user override for a built-in provider by restoring the default provider', () => {
     writeUserProviders([
       {
