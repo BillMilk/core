@@ -756,6 +756,7 @@ export function ConversationPage() {
                 ? null
                 : activeConversation.lastActiveAt ?? activeConversation.updatedAt}
               agentType={activeConversation.agentType}
+              runtimeType={activeConversation.runtimeType}
               providerId={selectedProviderId || activeConversation.providerId}
               providers={providersData}
               initialTokenUsage={activeConversation.tokenUsage}
@@ -765,7 +766,6 @@ export function ConversationPage() {
               onExit={invalidateActiveConversation}
               isSending={sendConversationMessage.isPending}
               isStopping={stopConversation.isPending}
-              canStop={isRunning(activeConversation.status)}
             />
           )}
         </main>

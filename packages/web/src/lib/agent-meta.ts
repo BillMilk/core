@@ -3,7 +3,7 @@ import { AgentType } from '@agent-tower/shared'
 export interface AgentMeta {
   agentType: AgentType
   label: string
-  logoSrc: string
+  logoSrc?: string
 }
 
 export const AGENT_META_BY_TYPE: Record<AgentType, AgentMeta> = {
@@ -26,6 +26,10 @@ export const AGENT_META_BY_TYPE: Record<AgentType, AgentMeta> = {
     agentType: AgentType.CODEX,
     label: 'Codex',
     logoSrc: '/agent-icons/codex.svg',
+  },
+  [AgentType.QWEN_CODE]: {
+    agentType: AgentType.QWEN_CODE,
+    label: 'Qwen Code',
   },
 }
 

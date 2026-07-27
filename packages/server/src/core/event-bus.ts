@@ -1,4 +1,10 @@
-import type { TeamRunInvalidatedPayload, WorkspaceGitChangedPayload } from '@agent-tower/shared/socket';
+import type {
+  SessionPermissionInvalidatedPayload,
+  SessionPermissionRequestedPayload,
+  SessionRuntimeStateChangedPayload,
+  TeamRunInvalidatedPayload,
+  WorkspaceGitChangedPayload,
+} from '@agent-tower/shared/socket';
 
 type EventMap = {
   'session:stdout': { sessionId: string; data: string };
@@ -12,6 +18,9 @@ type EventMap = {
   'session:started': { sessionId: string };
   'session:stopped': { sessionId: string };
   'session:sessionId': { sessionId: string; agentSessionId: string };
+  'session:permission_requested': SessionPermissionRequestedPayload;
+  'session:permission_invalidated': SessionPermissionInvalidatedPayload;
+  'session:runtime_state_changed': SessionRuntimeStateChangedPayload;
   'task:updated': { taskId: string; projectId: string; status: string };
   'task:deleted': { taskId: string; projectId: string };
   // Standalone terminal events

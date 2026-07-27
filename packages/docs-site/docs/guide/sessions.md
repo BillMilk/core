@@ -5,7 +5,7 @@ description: agent 执行与后续对话。
 
 # Session
 
-Session 表示一次 agent 执行或一次后续对话。常规任务 session 运行在 workspace 目录中，由后端的 PTY pipeline 管理；独立对话 session 运行在 conversation 工作目录中。
+Session 表示一个可包含多轮 turn 的业务会话。常规任务 session 运行在 workspace 目录中，独立对话 session 运行在 conversation 工作目录中；具体由 CLI 或 ACP Runtime 执行。
 
 ## 创建 Session
 
@@ -22,18 +22,24 @@ Session 表示一次 agent 执行或一次后续对话。常规任务 session �
 
 启动后，后端会：
 
-1. 根据 provider 选择 executor
-2. 在 workspace 目录启动 agent CLI
-3. 通过 node-pty 接管 stdout/stdin
-4. 把输出写入 MsgStore
-5. 尝试用 parser 结构化 agent 输出
-6. 通过 Socket.IO 推送给前端
+1. 从 Session 固化的 `runtimeType` 选择 Runtime Driver
+2. CLI Driver 启动 PTY/Pipeline，或 ACP Driver 建立连接并创建/恢复外部 session
+3. Driver 把输出投影为统一 MsgStore patch
+4. RuntimeCoordinator 管理 turn、取消、权限等待和迟到事件
+5. SessionManager 持久化快照并执行 Task、TeamRun 和 Git 后处理
+6. 通过 Socket.IO 推送实时变化
 
 ## 后续消息
 
 无论 session 正在运行还是已经结束，都可以通过统一入口发送后续消息。对于支持 session id 的 agent，系统会尽量使用 follow-up 模式延续上下文。
 
-后续消息可以指定新的 `providerId`，用于在继续对话时切换 provider。这个切换仅支持同一 `agentType` 内的 provider；如果要从 Codex 切到 Claude Code、Gemini CLI 或其他不同 agent 类型，需要新建 session 或独立对话。
+后续消息可以指定新的 `providerId`，用于在继续对话时切换 provider。这个切换只支持相同 `agentType` 和相同 `runtimeType`；切换 Agent 身份或在 CLI/ACP 之间切换都需要新建 Session。
+
+ACP Runtime 会持久化 Agent 返回的 external session ID。内存连接仍存在时直接复用；服务重启后仅在 Agent 声明支持 `session/load` 时恢复。
+
+## 权限请求
+
+ACP Agent 可以在 turn 中请求工具权限。`ASK` 模式下，Session 仍保持 `RUNNING`，Runtime 的细粒度状态变为 `AWAITING_PERMISSION`。前端重连后会重新请求 `/sessions/:id/runtime`，不会依赖已经错过的 Socket 事件还原待处理权限。
 
 ## 日志快照
 
@@ -53,7 +59,7 @@ Session 日志包含两层：
 | 状态 | 说明 |
 | --- | --- |
 | `PENDING` | 已创建，尚未启动 |
-| `RUNNING` | CLI 进程正在运行 |
+| `RUNNING` | Runtime 中存在正在执行或等待权限的 turn |
 | `COMPLETED` | 正常完成 |
 | `FAILED` | 执行失败 |
 | `CANCELLED` | 被用户停止或取消 |

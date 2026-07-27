@@ -12,6 +12,9 @@ import {
   type UnsubscribePayload,
   type SessionInputPayload,
   type SessionResizePayload,
+  type SessionPermissionInvalidatedPayload,
+  type SessionPermissionRequestedPayload,
+  type SessionRuntimeStateChangedPayload,
   type TerminalInputPayload,
   type TerminalResizePayload,
   type TeamRunInvalidatedPayload,
@@ -139,6 +142,15 @@ export class SocketGateway {
     const onSessionCompleted = ({ sessionId, status }: { sessionId: string; status: string }) => {
       emitToCurrentSockets(ServerEvents.SESSION_COMPLETED, { sessionId, status });
     };
+    const onPermissionRequested = (payload: SessionPermissionRequestedPayload) => {
+      emitToCurrentSockets(ServerEvents.SESSION_PERMISSION_REQUESTED, payload);
+    };
+    const onPermissionInvalidated = (payload: SessionPermissionInvalidatedPayload) => {
+      emitToCurrentSockets(ServerEvents.SESSION_PERMISSION_INVALIDATED, payload);
+    };
+    const onRuntimeStateChanged = (payload: SessionRuntimeStateChangedPayload) => {
+      emitToCurrentSockets(ServerEvents.SESSION_RUNTIME_STATE_CHANGED, payload);
+    };
     const onTask = ({ taskId, projectId, status }: { taskId: string; projectId: string; status: string }) => {
       emitToCurrentSockets(ServerEvents.TASK_UPDATED, { taskId, projectId, status });
     };
@@ -202,6 +214,9 @@ export class SocketGateway {
     this.eventBus.on('session:sessionId', onSessionId);
     this.eventBus.on('session:exit', onExit);
     this.eventBus.on('session:completed', onSessionCompleted);
+    this.eventBus.on('session:permission_requested', onPermissionRequested);
+    this.eventBus.on('session:permission_invalidated', onPermissionInvalidated);
+    this.eventBus.on('session:runtime_state_changed', onRuntimeStateChanged);
     this.eventBus.on('task:updated', onTask);
     this.eventBus.on('task:deleted', onTaskDeleted);
     this.eventBus.on('workspace:commit_message_updated', onWorkspaceCommitMessageUpdated);
@@ -219,6 +234,9 @@ export class SocketGateway {
       () => this.eventBus.off('session:sessionId', onSessionId),
       () => this.eventBus.off('session:exit', onExit),
       () => this.eventBus.off('session:completed', onSessionCompleted),
+      () => this.eventBus.off('session:permission_requested', onPermissionRequested),
+      () => this.eventBus.off('session:permission_invalidated', onPermissionInvalidated),
+      () => this.eventBus.off('session:runtime_state_changed', onRuntimeStateChanged),
       () => this.eventBus.off('task:updated', onTask),
       () => this.eventBus.off('task:deleted', onTaskDeleted),
       () => this.eventBus.off('workspace:commit_message_updated', onWorkspaceCommitMessageUpdated),

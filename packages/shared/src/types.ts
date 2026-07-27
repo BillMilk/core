@@ -36,6 +36,66 @@ export enum AgentType {
   GEMINI_CLI = 'GEMINI_CLI',
   CURSOR_AGENT = 'CURSOR_AGENT',
   CODEX = 'CODEX',
+  QWEN_CODE = 'QWEN_CODE',
+}
+
+/** Agent 执行协议。AgentType 表示身份，RuntimeType 表示运行方式。 */
+export enum RuntimeType {
+  CLI = 'CLI',
+  ACP = 'ACP',
+}
+
+export type RuntimeTurnState =
+  | 'IDLE'
+  | 'RUNNING'
+  | 'AWAITING_PERMISSION'
+  | 'CANCELLING'
+  | 'DISPOSED'
+
+export type RuntimePermissionMode = 'ASK' | 'AUTO_APPROVE'
+
+export interface RuntimeCapabilities {
+  loadSession: boolean
+  terminalInput: boolean
+  terminalResize: boolean
+  permissions: boolean
+}
+
+export interface RuntimePermissionOption {
+  optionId: string
+  name: string
+  kind: 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always' | 'unknown'
+}
+
+export interface RuntimePermissionRequest {
+  requestId: string
+  sessionId: string
+  turnId: string
+  toolCallId?: string
+  toolName?: string
+  toolSummary?: string
+  options: RuntimePermissionOption[]
+  createdAt: string
+}
+
+export interface RuntimeErrorDto {
+  code: string
+  stage: string
+  message: string
+  retryable: boolean
+}
+
+export interface RuntimeStateDto {
+  sessionId: string
+  runtimeType: RuntimeType
+  turnState: RuntimeTurnState
+  turnId?: string
+  capabilities: RuntimeCapabilities
+  pendingPermissions: RuntimePermissionRequest[]
+  externalSessionId?: string | null
+  agentInfo?: { name: string; version?: string }
+  lastActivityAt?: string
+  error?: RuntimeErrorDto
 }
 
 /** 会话状态 */
@@ -212,9 +272,11 @@ export interface Provider {
   id: string;
   name: string;
   agentType: AgentType | string;
+  /** 缺失时按 CLI 解释，用于兼容旧 Provider backup。 */
+  runtimeType?: RuntimeType;
   env: Record<string, string>;
   config: Record<string, unknown>;
-  /** CLI 原生配置字符串（Claude Code: JSON, Codex: TOML） */
+  /** Agent 原生配置字符串（Claude Code: JSON, Codex: TOML），由所选 Runtime 投影。 */
   settings?: string;
   isDefault: boolean;
   builtIn?: boolean;
@@ -255,6 +317,7 @@ export interface ProviderDraftInput {
   providerId?: string
   name: string
   agentType: AgentType
+  runtimeType?: RuntimeType
   env?: Record<string, ProviderSecretWriteState>
   config?: Record<string, unknown>
   settings?: string
@@ -703,6 +766,8 @@ export interface Session {
   conversationId?: string | null
   context?: SessionContext | string
   agentType: AgentType
+  runtimeType?: RuntimeType
+  externalSessionId?: string | null
   status: SessionStatus
   /** 会话用途 */
   purpose?: SessionPurpose
@@ -721,6 +786,7 @@ export interface Conversation {
   workingDir: string
   sessionId: string
   agentType: AgentType
+  runtimeType?: RuntimeType
   status: SessionStatus
   providerId?: string | null
   variant?: string | null

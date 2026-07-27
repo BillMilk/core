@@ -18,6 +18,7 @@ import type {
   ProviderImportPreviewItem,
   ProviderImportResult,
 } from '@agent-tower/shared';
+import { RuntimeType, supportsAgentRuntime } from '@agent-tower/shared';
 import { AgentType } from '../types/index.js';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
@@ -28,11 +29,12 @@ export interface Provider {
   id: string;
   name: string;
   agentType: AgentType | string;
+  runtimeType?: RuntimeType;
   /** 环境变量，启动进程时注入（API URL、API Key 等） */
   env: Record<string, string>;
   /** Agent 运行参数（如 dangerouslySkipPermissions、model、plan 等） */
   config: Record<string, unknown>;
-  /** CLI 原生配置字符串（Claude Code: JSON, Codex: TOML） */
+  /** Agent 原生配置字符串（Claude Code: JSON, Codex: TOML），由所选 Runtime 投影。 */
   settings?: string;
   /** 是否为该 AgentType 的默认 provider */
   isDefault: boolean;
@@ -46,6 +48,35 @@ export interface ProvidersData {
 }
 
 type PersistedProvider = Omit<Provider, 'builtIn'>;
+type ProviderCreateData = Omit<Provider, 'id' | 'createdAt' | 'builtIn' | 'runtimeType'> & {
+  runtimeType?: RuntimeType;
+};
+
+function normalizeRuntimeType(value: unknown): RuntimeType {
+  return value === RuntimeType.ACP ? RuntimeType.ACP : RuntimeType.CLI;
+}
+
+export function getProviderRuntimeType(provider: Pick<Provider, 'runtimeType'> | { runtimeType?: unknown }): RuntimeType {
+  return normalizeRuntimeType(provider.runtimeType);
+}
+
+function normalizeProvider(provider: Omit<Provider, 'runtimeType'> & { runtimeType?: unknown }): Provider {
+  return {
+    ...provider,
+    runtimeType: normalizeRuntimeType(provider.runtimeType),
+  };
+}
+
+function assertProviderRuntimeSupported(provider: Pick<Provider, 'agentType' | 'runtimeType'>): void {
+  const runtimeType = getProviderRuntimeType(provider);
+  if (!supportsAgentRuntime(provider.agentType, runtimeType)) {
+    throw new Error(`Agent '${provider.agentType}' does not support the '${runtimeType}' runtime`);
+  }
+}
+
+function providerDefaultKey(provider: Pick<Provider, 'agentType' | 'runtimeType'>): string {
+  return `${String(provider.agentType)}:${getProviderRuntimeType(provider)}`;
+}
 
 // ─── Defaults ────────────────────────────────────────────────────
 
@@ -85,20 +116,20 @@ function mergeProviders(builtIns: Provider[], userProviders: Provider[]): Provid
   for (const builtIn of builtIns) {
     const userOverride = userMap.get(builtIn.id);
     if (userOverride) {
-      result.push({
+      result.push(normalizeProvider({
         ...builtIn,
         ...userOverride,
         builtIn: true, // 始终标记为内置
-      });
+      }));
       userMap.delete(builtIn.id);
     } else {
-      result.push({ ...builtIn });
+      result.push(normalizeProvider({ ...builtIn }));
     }
   }
 
   // 用户新增的 providers
   for (const userProvider of userMap.values()) {
-    result.push({ ...userProvider, builtIn: false });
+    result.push(normalizeProvider({ ...userProvider, builtIn: false }));
   }
 
   return result;
@@ -109,6 +140,7 @@ function toPersistedProvider(provider: Provider): PersistedProvider {
     id: provider.id,
     name: provider.name,
     agentType: provider.agentType,
+    runtimeType: getProviderRuntimeType(provider),
     env: { ...(provider.env ?? {}) },
     config: { ...(provider.config ?? {}) },
     isDefault: !!provider.isDefault,
@@ -135,12 +167,12 @@ function normalizeProviderDefaults(providers: Provider[]): Provider[] {
 
   providers.forEach((provider, index) => {
     if (provider.isDefault) {
-      lastDefaultIndexByType.set(String(provider.agentType), index);
+      lastDefaultIndexByType.set(providerDefaultKey(provider), index);
     }
   });
 
   return providers.map((provider, index) => {
-    const lastDefaultIndex = lastDefaultIndexByType.get(String(provider.agentType));
+    const lastDefaultIndex = lastDefaultIndexByType.get(providerDefaultKey(provider));
     if (lastDefaultIndex === undefined) return provider;
     return {
       ...provider,
@@ -156,7 +188,7 @@ function areProvidersEquivalent(a: Provider, b: Provider): boolean {
 function getBuiltInProviderById(id: string): Provider | null {
   const provider = DEFAULT_PROVIDERS.providers.find(p => p.id === id);
   if (!provider) return null;
-  return { ...structuredClone(provider), builtIn: true as const };
+  return normalizeProvider({ ...structuredClone(provider), builtIn: true as const });
 }
 
 /**
@@ -173,7 +205,7 @@ function extractUserProviders(merged: Provider[]): Provider[] {
     } else {
       // 内置的，检查是否有修改
       const defaultProvider = DEFAULT_PROVIDERS.providers.find(p => p.id === provider.id);
-      if (defaultProvider && JSON.stringify(defaultProvider) !== JSON.stringify({ ...provider, builtIn: true })) {
+      if (defaultProvider && !areProvidersEquivalent(provider, normalizeProvider(defaultProvider))) {
         // 有修改，保存覆盖
         const { builtIn, ...rest } = provider;
         userProviders.push(rest);
@@ -188,7 +220,7 @@ function extractUserProviders(merged: Provider[]): Provider[] {
  * 加载 providers（内置 + 用户合并）
  */
 export function loadProviders(): Provider[] {
-  const builtIns = structuredClone(DEFAULT_PROVIDERS.providers).map(p => ({ ...p, builtIn: true as const }));
+  const builtIns = structuredClone(DEFAULT_PROVIDERS.providers).map(p => normalizeProvider({ ...p, builtIn: true as const }));
   const userPath = getUserProvidersPath();
 
   let userProviders: Provider[] = [];
@@ -196,7 +228,7 @@ export function loadProviders(): Provider[] {
     if (fs.existsSync(userPath)) {
       const content = fs.readFileSync(userPath, 'utf-8');
       const data = JSON.parse(content) as ProvidersData;
-      userProviders = data.providers ?? [];
+      userProviders = (data.providers ?? []).map(normalizeProvider);
     }
   } catch (e) {
     console.error('[Providers] Failed to load user providers.json:', e);
@@ -249,8 +281,9 @@ export function getProvidersByAgentType(agentType: AgentType | string): Provider
 /**
  * 获取某个 agentType 的默认 provider
  */
-export function getDefaultProvider(agentType: AgentType | string): Provider | null {
-  const providers = getProvidersByAgentType(agentType);
+export function getDefaultProvider(agentType: AgentType | string, runtimeType: RuntimeType = RuntimeType.CLI): Provider | null {
+  const providers = getProvidersByAgentType(agentType)
+    .filter(provider => getProviderRuntimeType(provider) === runtimeType);
   return providers.find(p => p.isDefault) ?? providers[0] ?? null;
 }
 
@@ -280,6 +313,7 @@ export function previewProviderImport(backup: ProviderBackupFile): ProviderImpor
 
   for (const rawProvider of backup.providers) {
     const incoming = toPersistedProvider(rawProvider);
+    assertProviderRuntimeSupported(incoming);
     const existing = existingById.get(incoming.id) ?? null;
 
     let action: ProviderImportPreviewItem['action'];
@@ -363,20 +397,21 @@ function saveProviders(providers: Provider[]): void {
 
 // ─── CRUD ────────────────────────────────────────────────────────
 
-export function createProvider(data: Omit<Provider, 'id' | 'createdAt' | 'builtIn'>): Provider {
+export function createProvider(data: ProviderCreateData): Provider {
   const providers = [...getAllProviders()];
 
-  const provider: Provider = {
+  const provider: Provider = normalizeProvider({
     ...data,
     id: randomUUID().slice(0, 8),
     builtIn: false,
     createdAt: new Date().toISOString(),
-  };
+  });
+  assertProviderRuntimeSupported(provider);
 
   // 如果设为默认，取消同类型其他默认
   if (provider.isDefault) {
     for (const p of providers) {
-      if (p.agentType === provider.agentType) {
+      if (providerDefaultKey(p) === providerDefaultKey(provider)) {
         p.isDefault = false;
       }
     }
@@ -392,12 +427,13 @@ export function updateProvider(id: string, data: Partial<Omit<Provider, 'id' | '
   const index = providers.findIndex(p => p.id === id);
   if (index === -1) return null;
 
-  const updated = { ...providers[index], ...data };
+  const updated = normalizeProvider({ ...providers[index], ...data });
+  assertProviderRuntimeSupported(updated);
 
   // 如果设为默认，取消同类型其他默认
   if (data.isDefault) {
     for (const p of providers) {
-      if (p.agentType === updated.agentType && p.id !== id) {
+      if (providerDefaultKey(p) === providerDefaultKey(updated) && p.id !== id) {
         p.isDefault = false;
       }
     }
@@ -442,5 +478,5 @@ export function canDeleteProvider(provider: Provider): boolean {
  * 获取内置默认 providers（不含用户自定义）
  */
 export function getDefaultProviders(): Provider[] {
-  return structuredClone(DEFAULT_PROVIDERS.providers).map(p => ({ ...p, builtIn: true as const }));
+  return structuredClone(DEFAULT_PROVIDERS.providers).map(p => normalizeProvider({ ...p, builtIn: true as const }));
 }

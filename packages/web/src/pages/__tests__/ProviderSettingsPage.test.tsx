@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AgentType, type ProviderDraftTestResult } from '@agent-tower/shared'
+import { AgentType, RuntimeType, type ProviderDraftTestResult } from '@agent-tower/shared'
 import {
   ProviderFormModal,
   type ProviderFormData,
@@ -39,6 +39,7 @@ function initialCodexData(overrides: Partial<ProviderFormData> = {}): ProviderFo
   return {
     name: 'Codex Test',
     agentType: AgentType.CODEX,
+    runtimeType: RuntimeType.CLI,
     config: {},
     settings: '',
     env: [],
@@ -109,6 +110,51 @@ beforeEach(() => {
 })
 
 describe('ProviderFormModal draft test invalidation', () => {
+  it('selects Codex ACP as an Agent option without exposing a runtime tab', () => {
+    const onSave = vi.fn()
+    renderModal(undefined, onSave)
+
+    act(() => findButton('Claude Code').click())
+    act(() => findButton('Codex (ACP)').click())
+    changeTextInput(document.querySelector('#provider-name') as HTMLInputElement, 'Codex ACP Test')
+
+    expect(document.querySelector('#provider-api-url')).not.toBeNull()
+    expect(document.querySelector('#provider-model')).not.toBeNull()
+    expect(findButton('高级配置')).not.toBeNull()
+    expect([...document.querySelectorAll('button')].some(button => button.textContent?.trim() === 'CLI')).toBe(false)
+    expect([...document.querySelectorAll('button')].some(button => button.textContent?.trim() === 'ACP')).toBe(false)
+
+    act(() => findButton('每次询问').click())
+    act(() => findButton('自动批准').click())
+    act(() => findButton('保存 Provider').click())
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      agentType: AgentType.CODEX,
+      runtimeType: RuntimeType.ACP,
+      config: expect.objectContaining({ permissionMode: 'AUTO_APPROVE' }),
+    }))
+  })
+
+  it('offers Claude Code and Qwen Code as ACP Agent choices', () => {
+    const onSave = vi.fn()
+    renderModal(undefined, onSave)
+
+    act(() => findButton('Claude Code').click())
+    expect(findButton('Claude Code (ACP)')).not.toBeNull()
+    expect(findButton('Qwen Code (ACP)')).not.toBeNull()
+    expect([...document.querySelectorAll('button')].some(button => button.textContent?.trim() === 'Qwen Code')).toBe(false)
+
+    act(() => findButton('Qwen Code (ACP)').click())
+    changeTextInput(document.querySelector('#provider-name') as HTMLInputElement, 'Qwen ACP Test')
+    act(() => findButton('保存 Provider').click())
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      agentType: AgentType.QWEN_CODE,
+      runtimeType: RuntimeType.ACP,
+      config: { permissionMode: 'ASK' },
+    }))
+  })
+
   it('does not restore an old response after a structured field changes', () => {
     renderModal(initialCodexData())
     const request = beginTest()

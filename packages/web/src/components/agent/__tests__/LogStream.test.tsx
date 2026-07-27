@@ -75,11 +75,45 @@ function errorEntry(id: string, content: string): LogEntry {
   }
 }
 
+function warningEntry(id: string, content: string): LogEntry {
+  return {
+    id,
+    type: LogType.Warning,
+    title: 'Warning',
+    content,
+  }
+}
+
 function infoEntry(id: string, content: string): LogEntry {
   return {
     id,
     type: LogType.Info,
     content,
+  }
+}
+
+function thinkingEntry(id: string, content: string): LogEntry {
+  return {
+    id,
+    type: LogType.Info,
+    title: 'Thinking',
+    content,
+  }
+}
+
+function acpTool(id: string, title: string, content: string): LogEntry {
+  return {
+    id,
+    type: LogType.Tool,
+    title: `${title} ✓`,
+    content,
+    tool: {
+      action: 'command_run',
+      name: title,
+      id,
+      kind: 'execute',
+      status: 'success',
+    },
   }
 }
 
@@ -206,6 +240,34 @@ describe('LogStream tool grouping', () => {
     expect(groupButtons[0].textContent).toContain('MCP tool call: agent-tower/post_room')
   })
 
+  it('keeps interleaved ACP thinking and tools in one generic execution group', async () => {
+    const logs: LogEntry[] = [
+      thinkingEntry('thinking-1', '**Identifying browser skill**'),
+      acpTool('tool-1', 'Read agent-browser skill', 'Input\n{"path":"SKILL.md"}'),
+      thinkingEntry('thinking-2', '**Planning network access**'),
+      acpTool('tool-2', 'Open Google News', 'Output\nGoogle 新闻'),
+    ]
+
+    await act(async () => {
+      root.render(<LogStream logs={logs} />)
+    })
+
+    const [groupButton] = getToolGroupButtons(container)
+    expect(groupButton).toBeDefined()
+    expect(groupButton?.textContent).toContain('工具调用')
+    expect(groupButton?.textContent).toContain('2')
+    expect(groupButton?.textContent).not.toContain('Planning network access')
+    expect(getToolGroupButtons(container)).toHaveLength(1)
+
+    await act(async () => {
+      groupButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(container.textContent).toContain('Read agent-browser skill')
+    expect(container.textContent).toContain('Open Google News')
+    expect(container.textContent).toContain('Identifying browser skill')
+  })
+
   it('renders a single error log as error block, not inside a 工具调用 group', async () => {
     const logs: LogEntry[] = [
       errorEntry('err-1', 'Session terminated unexpectedly'),
@@ -232,6 +294,27 @@ describe('LogStream tool grouping', () => {
     expect(getToolGroupButtons(container)).toHaveLength(0)
     expect(container.textContent).toContain('Error: connection refused')
     expect(container.textContent).toContain('Error: timeout exceeded')
+  })
+
+  it('renders a non-blocking warning in pale yellow and outside 工具调用 groups', async () => {
+    const logs: LogEntry[] = [
+      successTool('tool-1', 'MCP tool call: agent-tower/list_room_messages'),
+      warningEntry('warning-1', 'MCP server `agent-tower` failed to start: connection closed'),
+      successTool('tool-2', 'MCP tool call: agent-tower/post_room_message'),
+    ]
+
+    await act(async () => {
+      root.render(<LogStream logs={logs} />)
+    })
+
+    expect(getToolGroupButtons(container)).toHaveLength(2)
+    const warning = Array.from(container.querySelectorAll('div')).find((element) => (
+      element.classList.contains('bg-amber-50/70')
+    ))
+    expect(warning).toBeDefined()
+    expect(warning?.classList.contains('border-amber-200')).toBe(true)
+    expect(warning?.textContent).toContain('MCP server `agent-tower` failed to start')
+    expect(warning?.className).not.toContain('red')
   })
 
   it('keeps error logs separate from adjacent tool logs in grouping', async () => {

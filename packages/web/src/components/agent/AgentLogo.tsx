@@ -22,7 +22,7 @@ export function AgentLogo({
     setFailed(false)
   }, [meta?.logoSrc])
 
-  if (!meta || failed) {
+  if (!meta?.logoSrc || failed) {
     return (
       <Cpu
         aria-hidden="true"

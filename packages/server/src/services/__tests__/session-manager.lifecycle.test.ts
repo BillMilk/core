@@ -178,6 +178,40 @@ describe('SessionManager session status vs real process state', () => {
     await prisma.project.deleteMany();
   });
 
+  it('requires a Provider runtime supported by the selected Agent before persisting a session', async () => {
+    const { workspace } = await createSessionFixture();
+    const manager = new SessionManager(new EventBus());
+
+    await expect(manager.create(
+      workspace.id,
+      AgentType.QWEN_CODE,
+      'run qwen without an ACP provider',
+    )).rejects.toThrow("Agent 'QWEN_CODE' does not support the 'CLI' runtime");
+
+    getProviderByIdMock.mockReturnValue({
+      id: 'qwen-acp-provider',
+      name: 'Qwen Code ACP',
+      agentType: AgentType.QWEN_CODE,
+      runtimeType: 'ACP',
+      env: {},
+      config: {},
+      isDefault: false,
+    });
+    const created = await manager.create(
+      workspace.id,
+      AgentType.QWEN_CODE,
+      'run qwen through ACP',
+      'DEFAULT',
+      'qwen-acp-provider',
+    );
+
+    expect(created).toMatchObject({
+      agentType: AgentType.QWEN_CODE,
+      runtimeType: 'ACP',
+      providerId: 'qwen-acp-provider',
+    });
+  });
+
   it('resolves the latest Provider transport snapshot for every new or retried spawn', async () => {
     const first = await createSessionFixture({ providerId: 'provider-snapshot' });
     const second = await createSessionFixture({ providerId: 'provider-snapshot' });
@@ -255,6 +289,63 @@ describe('SessionManager session status vs real process state', () => {
       { path: 'fallback', disabled: true },
     ]);
     manager.destroyAll();
+  });
+
+  it('marks a reused ACP follow-up RUNNING without a new process event and allows it to stop', async () => {
+    const provider = {
+      id: 'reused-acp-provider',
+      name: 'Reused ACP Provider',
+      agentType: AgentType.CODEX,
+      runtimeType: 'ACP',
+      env: {},
+      config: {},
+      isDefault: false,
+    };
+    getProviderByIdMock.mockReturnValue(provider);
+    const { session } = await createSessionFixture({ providerId: provider.id });
+    await prisma.session.update({
+      where: { id: session.id },
+      data: {
+        runtimeType: 'ACP',
+        status: SessionStatus.COMPLETED,
+        externalSessionId: 'external-acp-session',
+      },
+    });
+
+    const completion = new Promise<never>(() => undefined);
+    const hasActiveTurn = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+    const runtimeCoordinator = {
+      hasActiveTurn,
+      startTurn: vi.fn(async () => ({ turnId: 'turn-2', completion })),
+      abandonTurn: vi.fn(async () => undefined),
+      cancelTurn: vi.fn(async () => undefined),
+      disposeSession: vi.fn(async () => undefined),
+      destroyAll: vi.fn(async () => undefined),
+    };
+    const manager = new SessionManager(new EventBus());
+    (manager as any).runtimeCoordinator = runtimeCoordinator;
+
+    await manager.sendMessage(session.id, 'continue on the reused ACP connection');
+
+    expect(runtimeCoordinator.startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      towerSessionId: session.id,
+      runtimeType: 'ACP',
+      resumeExternalSessionId: 'external-acp-session',
+    }));
+    expect((await prisma.session.findUnique({ where: { id: session.id } }))?.status)
+      .toBe(SessionStatus.RUNNING);
+    expect(await prisma.executionProcess.count({ where: { sessionId: session.id } })).toBe(0);
+
+    // Even if a stale terminal value is observed, an active Runtime turn wins.
+    await prisma.session.update({
+      where: { id: session.id },
+      data: { status: SessionStatus.COMPLETED },
+    });
+    await manager.stop(session.id);
+    expect(runtimeCoordinator.cancelTurn).toHaveBeenCalledWith(session.id);
+    expect((await prisma.session.findUnique({ where: { id: session.id } }))?.status)
+      .toBe(SessionStatus.CANCELLED);
+    await manager.destroyAll();
   });
 
   afterAll(async () => {
@@ -375,11 +466,11 @@ describe('SessionManager session status vs real process state', () => {
     expect(payload.status).toBe(SessionStatus.COMPLETED);
     expect((await prisma.session.findUnique({ where: { id: session.id } }))?.status)
       .toBe(SessionStatus.COMPLETED);
-    expect(manager.hasActivePipeline(session.id)).toBe(true);
+    expect(manager.hasActiveTurn(session.id)).toBe(false);
 
     await vi.waitFor(() => {
       expect(pty.killed).toBe(true);
-      expect(manager.hasActivePipeline(session.id)).toBe(false);
+      expect(manager.hasActiveTurn(session.id)).toBe(false);
     }, { timeout: 2000 });
 
     const persisted = await prisma.session.findUnique({ where: { id: session.id } });
@@ -423,6 +514,43 @@ describe('SessionManager session status vs real process state', () => {
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(autoCommitSpy.mock.calls[0]?.[0]).toBe(session.id);
     expect(autoCommitSpy.mock.calls[0]?.[1]).toBe(1);
+  });
+
+  it('writes a delayed follow-up into the new MsgStore after the completed store was released', async () => {
+    const { session } = await createSessionFixture();
+    const firstPty = new ControlledPty();
+    const secondPty = new ControlledPty();
+    spawnMock
+      .mockResolvedValueOnce(spawnResultFor(firstPty))
+      .mockResolvedValueOnce(spawnResultFor(secondPty));
+
+    const eventBus = new EventBus();
+    const manager = new SessionManager(eventBus);
+    const firstCompleted = waitForEvent(eventBus, 'session:completed');
+    await manager.start(session.id);
+    firstPty.emitData(JSON.stringify({ type: 'thread.started', thread_id: 'thread-delayed' }) + '\n');
+    firstPty.emitData(JSON.stringify({
+      type: 'item.completed',
+      item: { id: 'm1', type: 'agent_message', text: 'first response' },
+    }) + '\n');
+    firstPty.emitExit(0);
+    await firstCompleted;
+    await vi.waitFor(() => expect(sessionMsgStoreManager.has(session.id)).toBe(false));
+
+    await manager.sendMessage(session.id, 'delayed follow-up');
+    const secondCompleted = waitForEvent(eventBus, 'session:completed');
+    secondPty.emitData(JSON.stringify({
+      type: 'item.completed',
+      item: { id: 'm2', type: 'agent_message', text: 'second response' },
+    }) + '\n');
+    secondPty.emitExit(0);
+    await secondCompleted;
+
+    const persisted = await prisma.session.findUnique({ where: { id: session.id } });
+    const snapshot = JSON.parse(persisted?.logSnapshot ?? '{}');
+    expect(snapshot.entries.map((entry: { content: string }) => entry.content)).toEqual(
+      expect.arrayContaining(['first response', 'delayed follow-up', 'second response']),
+    );
   });
 
   it('accepts a follow-up that explicitly reuses the session provider', async () => {

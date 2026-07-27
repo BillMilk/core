@@ -11,8 +11,15 @@ import { GeminiCliExecutor, type GeminiCliConfig } from './gemini-cli.executor.j
 import { CursorAgentExecutor, type CursorAgentConfig } from './cursor-agent.executor.js';
 import { CodexExecutor, type CodexConfig } from './codex.executor.js';
 import { getVariantConfig, type VariantConfig } from './profiles.js';
-import { getProviderById, getDefaultProvider, getAllProviders, type Provider } from './providers.js';
+import {
+  getProviderById,
+  getDefaultProvider,
+  getAllProviders,
+  getProviderRuntimeType,
+  type Provider,
+} from './providers.js';
 import { resolveEffectiveProviderConnection } from '../services/provider-effective-connection.service.js';
+import { RuntimeType } from '@agent-tower/shared';
 
 // ─── Executor Factory ────────────────────────────────────────────
 
@@ -116,13 +123,14 @@ function createExecutorFromProvider(provider: Provider): BaseExecutor {
     }
     if (effective.providerKind === 'built-in') {
       delete env.OPENAI_BASE_URL;
-      unsetEnv.push('OPENAI_BASE_URL');
+      delete env.OPENAI_API_KEY;
+      unsetEnv.push('OPENAI_BASE_URL', 'OPENAI_API_KEY', 'CODEX_API_KEY');
       if (effective.secret) env.CODEX_API_KEY = effective.secret;
     } else if (effective.providerKind === 'custom') {
       delete env.OPENAI_BASE_URL;
-      unsetEnv.push('OPENAI_BASE_URL');
-      if (effective.envKey !== 'CODEX_API_KEY') delete env.CODEX_API_KEY;
-      unsetEnv.push('CODEX_API_KEY');
+      delete env.OPENAI_API_KEY;
+      delete env.CODEX_API_KEY;
+      unsetEnv.push('OPENAI_BASE_URL', 'OPENAI_API_KEY', 'CODEX_API_KEY');
       if (effective.envKey) {
         unsetEnv.push(effective.envKey);
         if (effective.secret !== undefined) env[effective.envKey] = effective.secret;
@@ -144,7 +152,7 @@ function createExecutorFromProvider(provider: Provider): BaseExecutor {
       env,
       unsetEnv,
     },
-    // CLI 原生配置（如 Claude Code 的 settings.json 覆盖）
+    // CLI Driver 投影 Agent 原生配置（如 Claude Code 的 settings.json 覆盖）
     settings: provider.settings,
     ...(connection ? { connection } : {}),
   };
@@ -154,6 +162,9 @@ function createExecutorFromProvider(provider: Provider): BaseExecutor {
 export async function smokeTestProviderConfiguration(provider: Provider): Promise<{
   availability: AvailabilityInfo;
 }> {
+  if (getProviderRuntimeType(provider) === RuntimeType.ACP) {
+    return { availability: await getAcpProviderAvailability(provider) };
+  }
   const executor = createExecutorFromProvider(provider);
   const availability = await executor.getAvailabilityInfo();
   const commandCapableExecutor = executor as unknown as {
@@ -235,18 +246,27 @@ export async function getAllProvidersAvailability(): Promise<
   const providers = getAllProviders();
   const results: Array<{ provider: Provider; availability: AvailabilityInfo }> = [];
 
-  // 缓存每种 agentType 的可用性结果，避免重复检查
+  // Runtime dependency checks differ even for the same AgentType.
   const availabilityCache = new Map<string, AvailabilityInfo>();
 
   for (const provider of providers) {
     const agentType = provider.agentType as AgentType;
-    let availability = availabilityCache.get(agentType);
+    const runtimeType = getProviderRuntimeType(provider);
+    const cacheKey = `${agentType}:${runtimeType}`;
+    // ACP definitions may resolve Provider-specific absolute executable paths.
+    let availability = runtimeType === RuntimeType.CLI
+      ? availabilityCache.get(cacheKey)
+      : undefined;
 
     if (!availability) {
       try {
-        const executor = createExecutorFromProvider(provider);
-        availability = await executor.getAvailabilityInfo();
-        availabilityCache.set(agentType, availability);
+        if (runtimeType === RuntimeType.ACP) {
+          availability = await getAcpProviderAvailability(provider);
+        } else {
+          const executor = createExecutorFromProvider(provider);
+          availability = await executor.getAvailabilityInfo();
+        }
+        if (runtimeType === RuntimeType.CLI) availabilityCache.set(cacheKey, availability);
       } catch {
         results.push({
           provider,
@@ -260,6 +280,11 @@ export async function getAllProvidersAvailability(): Promise<
   }
 
   return results;
+}
+
+async function getAcpProviderAvailability(provider: Provider): Promise<AvailabilityInfo> {
+  const { getAcpAgentDefinition } = await import('../runtime/acp/agents/registry.js');
+  return getAcpAgentDefinition(provider.agentType as AgentType).checkAvailability(provider);
 }
 
 // 导出类
@@ -306,6 +331,7 @@ export {
   loadProviders,
   reloadProviders,
   getDefaultProviders,
+  getProviderRuntimeType,
 } from './providers.js';
 
 // 导出类型

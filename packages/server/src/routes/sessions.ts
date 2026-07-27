@@ -5,6 +5,8 @@ import { AgentType, SessionContext } from '../types/index.js';
 import { sessionMsgStoreManager } from '../output/index.js';
 import { prisma } from '../utils/index.js';
 import { getProviderById } from '../executors/index.js';
+import { RuntimeType } from '@agent-tower/shared';
+import { ServiceError } from '../errors.js';
 
 function buildProjectReadOnlyError(project: {
   name: string;
@@ -51,6 +53,10 @@ const createSessionSchema = z.object({
 const sendMessageSchema = z.object({
   message: z.string().min(1),
   providerId: z.string().optional(),
+});
+
+const resolvePermissionSchema = z.object({
+  optionId: z.string().min(1).max(512),
 });
 
 function isConversationSession(session: { context?: string | null; conversationId?: string | null }) {
@@ -133,15 +139,23 @@ export async function sessionRoutes(app: FastifyInstance) {
         return { error: 'Either agentType or providerId must be provided' };
       }
 
-      const session = await sessionService.create(
-        request.params.workspaceId,
-        agentType,
-        body.prompt,
-        body.variant,
-        body.providerId
-      );
-      reply.code(201);
-      return session;
+      try {
+        const session = await sessionService.create(
+          request.params.workspaceId,
+          agentType,
+          body.prompt,
+          body.variant,
+          body.providerId
+        );
+        reply.code(201);
+        return session;
+      } catch (error) {
+        if (error instanceof ServiceError) {
+          reply.code(error.statusCode);
+          return { error: error.message, code: error.code };
+        }
+        throw error;
+      }
     }
   );
 
@@ -234,6 +248,50 @@ export async function sessionRoutes(app: FastifyInstance) {
         return { error: error instanceof Error ? error.message : 'Failed to send message' };
       }
     }
+  );
+
+  // Runtime state is authoritative for reconnect recovery. Permission
+  // resolvers remain in memory and are never inferred from Socket state.
+  app.get<{ Params: { id: string } }>(
+    '/sessions/:id/runtime',
+    async (request, reply) => {
+      const session = await prisma.session.findUnique({
+        where: { id: request.params.id },
+        select: { id: true, runtimeType: true },
+      });
+      if (!session) {
+        reply.code(404);
+        return { error: 'Session not found' };
+      }
+      const runtimeType = session.runtimeType === RuntimeType.ACP ? RuntimeType.ACP : RuntimeType.CLI;
+      return sessionService.getRuntimeState(session.id, runtimeType);
+    },
+  );
+
+  app.post<{ Params: { id: string; requestId: string } }>(
+    '/sessions/:id/permissions/:requestId/resolve',
+    async (request, reply) => {
+      const body = resolvePermissionSchema.parse(request.body);
+      const session = await prisma.session.findUnique({
+        where: { id: request.params.id },
+        select: { id: true },
+      });
+      if (!session) {
+        reply.code(404);
+        return { error: 'Session not found' };
+      }
+      try {
+        await sessionService.resolveRuntimePermission(
+          session.id,
+          request.params.requestId,
+          body.optionId,
+        );
+        return { success: true };
+      } catch (error) {
+        reply.code(409);
+        return { error: error instanceof Error ? error.message : 'Permission request is no longer active' };
+      }
+    },
   );
 
   // 获取会话日志快照

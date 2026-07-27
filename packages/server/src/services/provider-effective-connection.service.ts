@@ -11,9 +11,13 @@ import { isAgentSubprocessProtectedEnvKey } from '../executors/execution-env.js'
 
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 export const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
+export const CODEX_OPENAI_COMPATIBLE_PROVIDER_ID = 'agent-tower-openai-compatible';
+export const CODEX_OPENAI_COMPATIBLE_PROVIDER_NAME = 'Agent Tower OpenAI Compatible';
+export const CODEX_OPENAI_COMPATIBLE_ENV_KEY = 'AGENT_TOWER_CODEX_PROVIDER_KEY';
 
 export type EffectiveProviderConnectionSource =
   | 'codex-openai'
+  | 'codex-openai-compatible'
   | 'codex-custom'
   | 'codex-native'
   | 'legacy-env'
@@ -27,6 +31,8 @@ export interface EffectiveProviderConnection {
   modelProviderId?: string;
   baseUrl?: string;
   envKey?: string;
+  /** Persisted Provider env key that owns the secret; may differ from the child env_key. */
+  credentialEnvKey?: string;
   /** Server-only value. Never serialize this object into an API response or log. */
   secret?: string;
   source: EffectiveProviderConnectionSource;
@@ -63,6 +69,15 @@ function validateHttpBaseUrl(baseUrl: string | undefined): ProviderConfigDiagnos
   }
 }
 
+function isOfficialOpenAiBaseUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.protocol === 'https:' && url.hostname.toLowerCase() === 'api.openai.com';
+  } catch {
+    return false;
+  }
+}
+
 function resolveCodexConnection(
   provider: Pick<Provider, 'agentType' | 'env' | 'settings'>,
 ): EffectiveProviderConnection {
@@ -95,6 +110,22 @@ function resolveCodexConnection(
     const legacyBaseUrl = provider.env.OPENAI_BASE_URL?.trim() || undefined;
     const baseUrl = canonicalBaseUrl ?? legacyBaseUrl ?? DEFAULT_OPENAI_BASE_URL;
     diagnostics.push(...validateHttpBaseUrl(baseUrl));
+    const secret = provider.env.OPENAI_API_KEY;
+    if (!isOfficialOpenAiBaseUrl(baseUrl)) {
+      return {
+        agentType: provider.agentType,
+        protocol: 'openai-compatible',
+        providerKind: 'custom',
+        modelProviderId: CODEX_OPENAI_COMPATIBLE_PROVIDER_ID,
+        baseUrl,
+        envKey: CODEX_OPENAI_COMPATIBLE_ENV_KEY,
+        credentialEnvKey: 'OPENAI_API_KEY',
+        secret,
+        source: 'codex-openai-compatible',
+        legacyBaseUrl: !canonicalBaseUrl && !!legacyBaseUrl,
+        diagnostics,
+      };
+    }
     return {
       agentType: provider.agentType,
       protocol: 'openai-compatible',
@@ -102,7 +133,8 @@ function resolveCodexConnection(
       modelProviderId,
       baseUrl,
       envKey: 'OPENAI_API_KEY',
-      secret: provider.env.OPENAI_API_KEY,
+      credentialEnvKey: 'OPENAI_API_KEY',
+      secret,
       source: canonicalBaseUrl ? 'codex-openai' : legacyBaseUrl ? 'legacy-env' : 'default',
       legacyBaseUrl: !canonicalBaseUrl && !!legacyBaseUrl,
       diagnostics,
@@ -178,6 +210,7 @@ function resolveCodexConnection(
     modelProviderId,
     baseUrl,
     envKey,
+    credentialEnvKey: envKey,
     secret: envKey && !protectedEnvKey ? provider.env[envKey] : undefined,
     source: 'codex-custom',
     legacyBaseUrl: false,
@@ -214,10 +247,27 @@ export function resolveEffectiveProviderConnection(
       providerKind: 'direct',
       baseUrl: effectiveBaseUrl,
       envKey: 'ANTHROPIC_API_KEY',
+      credentialEnvKey: 'ANTHROPIC_API_KEY',
       secret,
       source: 'provider-env',
       legacyBaseUrl: false,
       diagnostics: validateHttpBaseUrl(effectiveBaseUrl),
+    };
+  }
+
+  if (provider.agentType === AgentType.QWEN_CODE) {
+    const baseUrl = provider.env.OPENAI_BASE_URL?.trim() || undefined;
+    return {
+      agentType: provider.agentType,
+      protocol: baseUrl ? 'openai-compatible' : null,
+      providerKind: 'direct',
+      baseUrl,
+      envKey: 'OPENAI_API_KEY',
+      credentialEnvKey: 'OPENAI_API_KEY',
+      secret: provider.env.OPENAI_API_KEY,
+      source: 'provider-env',
+      legacyBaseUrl: false,
+      diagnostics: validateHttpBaseUrl(baseUrl),
     };
   }
 

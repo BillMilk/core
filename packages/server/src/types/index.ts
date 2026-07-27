@@ -27,6 +27,7 @@ export enum AgentType {
   GEMINI_CLI = 'GEMINI_CLI',
   CURSOR_AGENT = 'CURSOR_AGENT',
   CODEX = 'CODEX',
+  QWEN_CODE = 'QWEN_CODE',
 }
 
 // 会话状态

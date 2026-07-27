@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { useStickToBottom } from 'use-stick-to-bottom'
 import { useQueryClient } from '@tanstack/react-query'
 import { SessionStatus, WorkspaceStatus, type ConflictOp, type Session, type TaskBody } from '@agent-tower/shared'
-import { LogStream, TodoPanel, TokenUsageIndicator } from '@/components/agent'
+import { LogStream, RuntimePermissionPrompt, TodoPanel, TokenUsageIndicator } from '@/components/agent'
 import {
   ArrowLeft, ArrowUp, ArrowDown, Paperclip, Play, Square,
   MessageSquare, FolderOpen, GitGraph, Code2, Trash2, MoreVertical, History, Users,
@@ -16,7 +16,7 @@ import { MobileHistoryView } from './MobileHistoryView'
 import { useTaskTeamRun, useRoomMessages, usePostRoomMessage } from '@/hooks/use-team-run'
 import { useWorkspaces, useOpenInEditor } from '@/hooks/use-workspaces'
 import { useNormalizedLogs } from '@/lib/socket/hooks/useNormalizedLogs'
-import { useSendMessage, useStopSession } from '@/hooks/use-sessions'
+import { useSendMessage, useSessionActivity, useStopSession } from '@/hooks/use-sessions'
 import { useProviders } from '@/hooks/use-providers'
 import { useTaskBody } from '@/hooks/use-tasks'
 import { useTodos } from '@/hooks/use-todos'
@@ -434,7 +434,10 @@ export function MobileTaskDetail({ task, onBack, onDeleteTask, isDeleting, autoS
   const handleOpenDisplayedSessionPreviewUrl = useCallback((url: string) => {
     handleOpenPreviewUrl(url, displayedSessionWorkspaceId)
   }, [displayedSessionWorkspaceId, handleOpenPreviewUrl])
-  const isSessionActive = displayedSession?.status === SessionStatus.RUNNING || displayedSession?.status === SessionStatus.PENDING
+  const { isActive: isSessionActive, isCancelling: isSessionCancelling } = useSessionActivity(
+    displayedSession?.id ?? '',
+    displayedSession?.status,
+  )
   const isReadOnlySession = useMemo(() => {
     if (!activeSession || !workspaces) return false
     const hasActiveWorkspace = workspaces.some((workspace) =>
@@ -990,6 +993,7 @@ export function MobileTaskDetail({ task, onBack, onDeleteTask, isDeleting, autoS
           ) : sessionId && (
             <div className="px-3 py-2 bg-white shrink-0 border-t border-neutral-100">
               {workspaceChangeSummaryBar}
+              <RuntimePermissionPrompt sessionId={logSessionId || sessionId} compact />
               <div
                 ref={inputContainerRef}
                 className="relative bg-white rounded-xl border border-neutral-200 shadow-sm focus-within:border-neutral-300"
@@ -1038,6 +1042,7 @@ export function MobileTaskDetail({ task, onBack, onDeleteTask, isDeleting, autoS
                         providers={providers}
                         currentProviderId={selectedProviderId}
                         agentType={activeSession.agentType}
+                        runtimeType={activeSession.runtimeType}
                         onSelect={handleSelectProvider}
                       />
                     )}
@@ -1045,7 +1050,7 @@ export function MobileTaskDetail({ task, onBack, onDeleteTask, isDeleting, autoS
                     {isSessionActive && !input.trim() && !hasAttachments ? (
                       <button
                         onClick={handleStop}
-                        disabled={stopSession.isPending}
+                        disabled={stopSession.isPending || isSessionCancelling}
                         className="p-1.5 rounded-lg bg-red-500 text-white active:bg-red-600 disabled:opacity-50"
                       >
                         <Square size={12} />

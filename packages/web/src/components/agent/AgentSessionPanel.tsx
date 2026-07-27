@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStickToBottom } from 'use-stick-to-bottom'
 import { ArrowDown, ArrowUp, Paperclip, Square } from 'lucide-react'
-import { SessionStatus } from '@agent-tower/shared'
+import { SessionStatus, type RuntimeType } from '@agent-tower/shared'
 import { LogStream } from './LogStream'
 import { TodoPanel } from './TodoPanel'
 import { TokenUsageIndicator } from './TokenUsageBar'
+import { RuntimePermissionPrompt } from './RuntimePermissionPrompt'
 import { ProviderSelector } from '@/components/task/ProviderSelector'
 import { AttachmentPreview } from '@/components/ui/AttachmentPreview'
 import { useAttachments } from '@/hooks/use-attachments'
@@ -12,6 +13,7 @@ import type { ProviderWithAvailability } from '@/hooks/use-providers'
 import { useTodos } from '@/hooks/use-todos'
 import { useTokenUsage, type TokenUsageInfo } from '@/hooks/useTokenUsage'
 import { useNormalizedLogs } from '@/lib/socket/hooks/useNormalizedLogs'
+import { useSessionActivity } from '@/hooks/use-sessions'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 
@@ -27,6 +29,7 @@ interface AgentSessionPanelProps {
   sessionStartedAt?: string | number | null
   sessionEndedAt?: string | number | null
   agentType: string
+  runtimeType?: RuntimeType | string
   providerId?: string | null
   providers: ProviderWithAvailability[]
   initialTokenUsage?: TokenUsageInfo | null
@@ -40,16 +43,13 @@ interface AgentSessionPanelProps {
   className?: string
 }
 
-function isActiveStatus(status?: SessionStatus | string): boolean {
-  return status === SessionStatus.RUNNING || status === SessionStatus.PENDING
-}
-
 export function AgentSessionPanel({
   sessionId,
   sessionStatus,
   sessionStartedAt,
   sessionEndedAt,
   agentType,
+  runtimeType,
   providerId,
   providers,
   initialTokenUsage,
@@ -105,7 +105,7 @@ export function AgentSessionPanel({
     isUploading,
   } = useAttachments()
 
-  const isSessionActive = isActiveStatus(sessionStatus)
+  const { isActive: isSessionActive, isCancelling: isSessionCancelling } = useSessionActivity(sessionId, sessionStatus)
   const canStopSession = canStop ?? isSessionActive
 
   useEffect(() => {
@@ -180,9 +180,9 @@ export function AgentSessionPanel({
   ])
 
   const handleStop = useCallback(async () => {
-    if (!canStopSession || isStopping) return
+    if (!canStopSession || isStopping || isSessionCancelling) return
     await onStop()
-  }, [canStopSession, isStopping, onStop])
+  }, [canStopSession, isStopping, isSessionCancelling, onStop])
 
   const handleFileInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = event.target.files
@@ -282,6 +282,7 @@ export function AgentSessionPanel({
         onDrop={handleDrop}
       >
         <div className="mx-auto max-w-4xl">
+          <RuntimePermissionPrompt sessionId={sessionId} />
           {error ? (
             <div className="mb-2 text-sm text-destructive">{error}</div>
           ) : null}
@@ -337,6 +338,7 @@ export function AgentSessionPanel({
                   providers={providers}
                   currentProviderId={selectedProviderId}
                   agentType={agentType}
+                  runtimeType={runtimeType}
                   onSelect={handleProviderSelect}
                 />
                 <TokenUsageIndicator usage={tokenUsage} />
@@ -344,7 +346,7 @@ export function AgentSessionPanel({
                   <button
                     type="button"
                     onClick={handleStop}
-                    disabled={isStopping}
+                    disabled={isStopping || isSessionCancelling}
                     className="rounded-lg bg-destructive p-2 text-white transition-all duration-200 hover:bg-destructive/90 disabled:opacity-50"
                     title={t('Stop')}
                   >

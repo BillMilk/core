@@ -13,14 +13,15 @@ description: 安装并启动 Agent Tower，并准备好一个可用的 agent CLI
 - 本机已安装 Git
 - 至少安装一个你要使用的 agent 执行器
 
-Agent Tower 本身不负责执行代码，它会调用你本机已经安装好的 agent CLI。建议先准备好下面任意一个：
+Agent Tower 本身不负责执行代码，它会通过 CLI Driver 或 ACP Driver 调用 Agent。多数 Runtime 仍需要本机可用的 Agent CLI；建议先准备好下面任意一个：
 
-| 执行器 | 官方安装文档 |
-| --- | --- |
-| Claude Code | [Claude Code Setup](https://code.claude.com/docs/en/setup) |
-| Codex CLI | [Codex CLI](https://developers.openai.com/codex/cli) |
-| Cursor CLI | [Cursor CLI](https://cursor.com/cli) |
-| Gemini CLI | [Gemini CLI Get started](https://github.com/google-gemini/gemini-cli/blob/main/docs/get-started/index.md) |
+| 执行器 | 可用 Runtime | 官方安装文档 |
+| --- | --- | --- |
+| Claude Code | CLI、ACP | [Claude Code Setup](https://code.claude.com/docs/en/setup) |
+| Codex CLI | CLI、ACP | [Codex CLI](https://developers.openai.com/codex/cli) |
+| Cursor CLI | CLI | [Cursor CLI](https://cursor.com/cli) |
+| Gemini CLI | CLI | [Gemini CLI Get started](https://github.com/google-gemini/gemini-cli/blob/main/docs/get-started/index.md) |
+| Qwen Code | ACP | [Qwen Code](https://github.com/QwenLM/qwen-code) |
 
 如果你已经能在终端里直接运行其中任意一个，就可以继续下一步。
 

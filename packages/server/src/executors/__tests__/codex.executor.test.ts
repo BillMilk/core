@@ -26,6 +26,8 @@ import type { CmdOverrides, CommandBuilder } from '../command-builder.js';
 import { AgentType } from '../../types/index.js';
 import { CODEX_NATIVE_MODEL_PROVIDER_IDS } from '@agent-tower/shared';
 import {
+  CODEX_OPENAI_COMPATIBLE_ENV_KEY,
+  CODEX_OPENAI_COMPATIBLE_PROVIDER_ID,
   probeEffectiveProviderConnection,
   resolveEffectiveProviderConnection,
 } from '../../services/provider-effective-connection.service.js';
@@ -196,9 +198,22 @@ describe('Codex Provider runtime connection snapshots', () => {
 
     const executorA = getExecutorByProvider(provider.id)!;
     const runtimeA = inspectRuntime(executorA, { OPENAI_BASE_URL: 'https://session-old.example' });
-    expect(runtimeA.args).toContain('model_provider="openai"');
-    expect(runtimeA.args).toContain('openai_base_url="https://runtime-a.example/v1"');
-    expect(runtimeA.env.CODEX_API_KEY === keyA).toBe(true);
+    expect(runtimeA.args).toContain(`model_provider="${CODEX_OPENAI_COMPATIBLE_PROVIDER_ID}"`);
+    expect(runtimeA.args).toContain(
+      `model_providers.${CODEX_OPENAI_COMPATIBLE_PROVIDER_ID}.base_url="https://runtime-a.example/v1"`,
+    );
+    expect(runtimeA.args).toContain(
+      `model_providers.${CODEX_OPENAI_COMPATIBLE_PROVIDER_ID}.name="Agent Tower OpenAI Compatible"`,
+    );
+    expect(runtimeA.args).toContain(
+      `model_providers.${CODEX_OPENAI_COMPATIBLE_PROVIDER_ID}.wire_api="responses"`,
+    );
+    expect(runtimeA.args).toContain(
+      `model_providers.${CODEX_OPENAI_COMPATIBLE_PROVIDER_ID}.env_key="${CODEX_OPENAI_COMPATIBLE_ENV_KEY}"`,
+    );
+    expect(runtimeA.env[CODEX_OPENAI_COMPATIBLE_ENV_KEY] === keyA).toBe(true);
+    expect(runtimeA.env).not.toHaveProperty('OPENAI_API_KEY');
+    expect(runtimeA.env).not.toHaveProperty('CODEX_API_KEY');
     expect(runtimeA.env).not.toHaveProperty('OPENAI_BASE_URL');
     expect(JSON.stringify(runtimeA.args)).not.toContain(keyA);
     expect(runtimeA.args.some(arg => arg.includes('supports_websockets'))).toBe(false);
@@ -211,22 +226,26 @@ describe('Codex Provider runtime connection snapshots', () => {
     });
     const executorB = getExecutorByProvider(provider.id)!;
     const runtimeB = inspectRuntime(executorB, { OPENAI_BASE_URL: 'https://session-old.example' });
-    expect(runtimeB.args).toContain('openai_base_url="https://runtime-b.example/v1"');
-    expect(runtimeB.env.CODEX_API_KEY === keyB).toBe(true);
-    expect(runtimeB.env.CODEX_API_KEY === process.env.CODEX_API_KEY).toBe(false);
+    expect(runtimeB.args).toContain(
+      `model_providers.${CODEX_OPENAI_COMPATIBLE_PROVIDER_ID}.base_url="https://runtime-b.example/v1"`,
+    );
+    expect(runtimeB.env[CODEX_OPENAI_COMPATIBLE_ENV_KEY] === keyB).toBe(true);
+    expect(runtimeB.env).not.toHaveProperty('OPENAI_API_KEY');
+    expect(runtimeB.env).not.toHaveProperty('CODEX_API_KEY');
     expect(runtimeB.args).toEqual(expect.arrayContaining([
-      `model_providers.${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}.name="OpenAI"`,
-      `model_providers.${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}.base_url="https://runtime-b.example/v1"`,
-      `model_providers.${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}.wire_api="responses"`,
-      `model_providers.${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}.requires_openai_auth=true`,
-      `model_providers.${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}.supports_websockets=false`,
-      `model_provider="${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}"`,
+      `model_providers.${CODEX_OPENAI_COMPATIBLE_PROVIDER_ID}.env_key="${CODEX_OPENAI_COMPATIBLE_ENV_KEY}"`,
+      `model_providers.${CODEX_OPENAI_COMPATIBLE_PROVIDER_ID}.supports_websockets=false`,
+      `model_provider="${CODEX_OPENAI_COMPATIBLE_PROVIDER_ID}"`,
     ]));
-    expect(runtimeB.args.at(-1)).toBe(`model_provider="${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}"`);
+    expect(runtimeB.args.at(-1)).toBe(
+      `model_providers.${CODEX_OPENAI_COMPATIBLE_PROVIDER_ID}.supports_websockets=false`,
+    );
 
     const oldSnapshot = inspectRuntime(executorA);
-    expect(oldSnapshot.args).toContain('openai_base_url="https://runtime-a.example/v1"');
-    expect(oldSnapshot.env.CODEX_API_KEY === keyA).toBe(true);
+    expect(oldSnapshot.args).toContain(
+      `model_providers.${CODEX_OPENAI_COMPATIBLE_PROVIDER_ID}.base_url="https://runtime-a.example/v1"`,
+    );
+    expect(oldSnapshot.env[CODEX_OPENAI_COMPATIBLE_ENV_KEY] === keyA).toBe(true);
     expect(oldSnapshot.args.some(arg => arg.includes('supports_websockets'))).toBe(false);
   });
 
@@ -293,7 +312,7 @@ describe('Codex Provider runtime connection snapshots', () => {
     expect(JSON.stringify(runtime.args)).not.toContain(customKey);
   });
 
-  it('projects a legacy OpenAI URL through the fixed HTTP-only alias without exposing the key', () => {
+  it('projects a legacy OpenAI-compatible URL through a dedicated provider without exposing the key', () => {
     const key = 'legacy-runtime-key-sentinel';
     const provider = createProvider({
       name: 'Codex Legacy HTTP-only',
@@ -309,13 +328,18 @@ describe('Codex Provider runtime connection snapshots', () => {
 
     const runtime = inspectRuntime(getExecutorByProvider(provider.id)!);
     expect(runtime.args).toContain(
-      `model_providers.${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}.base_url="https://legacy-runtime.example/v1"`,
+      `model_providers.${CODEX_OPENAI_COMPATIBLE_PROVIDER_ID}.base_url="https://legacy-runtime.example/v1"`,
     );
     expect(runtime.args).toContain(
-      `model_providers.${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}.supports_websockets=false`,
+      `model_providers.${CODEX_OPENAI_COMPATIBLE_PROVIDER_ID}.supports_websockets=false`,
     );
-    expect(runtime.args.at(-1)).toBe(`model_provider="${CODEX_HTTP_ONLY_OPENAI_PROVIDER_ID}"`);
-    expect(runtime.env.CODEX_API_KEY === key).toBe(true);
+    expect(runtime.args).not.toContain(
+      `model_providers.${CODEX_OPENAI_COMPATIBLE_PROVIDER_ID}.requires_openai_auth=true`,
+    );
+    expect(runtime.args).toContain(`model_provider="${CODEX_OPENAI_COMPATIBLE_PROVIDER_ID}"`);
+    expect(runtime.env[CODEX_OPENAI_COMPATIBLE_ENV_KEY] === key).toBe(true);
+    expect(runtime.env).not.toHaveProperty('OPENAI_API_KEY');
+    expect(runtime.env).not.toHaveProperty('CODEX_API_KEY');
     expect(runtime.env).not.toHaveProperty('OPENAI_BASE_URL');
     expect(JSON.stringify(runtime.args)).not.toContain(key);
   });

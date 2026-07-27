@@ -62,6 +62,10 @@ if (existsSync(dbFile)) rmSync(dbFile);
 // 4. 复制 postinstall 脚本
 mkdirSync(resolve(publishDir, 'scripts'), { recursive: true });
 cpSync(resolve(serverDir, 'scripts/postinstall.js'), resolve(publishDir, 'scripts/postinstall.js'));
+cpSync(
+  resolve(serverDir, 'scripts/patch-claude-agent-acp.mjs'),
+  resolve(publishDir, 'scripts/patch-claude-agent-acp.mjs'),
+);
 
 // 5. 将 @agent-tower/shared 放入 node_modules（bundledDependencies 需要）
 const sharedDest = resolve(publishDir, 'node_modules/@agent-tower/shared');

@@ -30,6 +30,7 @@ export type NormalizedEntryType =
   | 'tool_use'
   | 'system_message'
   | 'error_message'
+  | 'warning_message'
   | 'thinking'
   | 'loading'
   | 'next_action'
@@ -51,11 +52,25 @@ export type ActionType =
 // 工具状态
 export type ToolStatus =
   | 'created'
+  | 'pending'
+  | 'in_progress'
   | 'success'
   | 'failed'
   | 'denied'
   | 'pending_approval'
   | 'timed_out'
+
+export type ToolContent =
+  | { type: 'text'; text: string }
+  | { type: 'resource_link'; uri: string; name?: string }
+  | { type: 'diff'; path: string; oldText?: string; newText: string }
+  | { type: 'terminal'; terminalId: string }
+  | { type: 'unsupported'; contentType: string }
+
+export interface ToolLocation {
+  path: string
+  line?: number
+}
 
 // 文件变更类型
 export type FileChange =
@@ -81,13 +96,19 @@ export interface NormalizedEntry {
     action?: ActionType
     toolName?: string
     toolId?: string
+    toolKind?: string
     status?: ToolStatus
+    toolContent?: ToolContent[]
+    toolLocations?: ToolLocation[]
+    toolInputSummary?: string
+    toolOutputSummary?: string
     fileChanges?: FileChange[]
     tokenUsage?: {
       totalTokens?: number
       modelContextWindow?: number
     }
     error?: string
+    warning?: string
     /** Agent todo list (for todo_management action) */
     todos?: TodoItem[]
     todoOperation?: string
@@ -151,6 +172,17 @@ export function createErrorMessage(content: string, error?: string, id?: string)
     entryType: 'error_message',
     content,
     metadata: error ? { error } : undefined,
+  }
+}
+
+// 辅助函数：创建警告消息
+export function createWarningMessage(content: string, warning?: string, id?: string): NormalizedEntry {
+  return {
+    id: id || crypto.randomUUID(),
+    timestamp: Date.now(),
+    entryType: 'warning_message',
+    content,
+    metadata: warning ? { warning } : undefined,
   }
 }
 

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { RuntimeType } from '@agent-tower/shared';
 import { AgentType } from '../../types/index.js';
 import { getAllProvidersAvailability } from '../index.js';
 import { reloadProviders } from '../providers.js';
@@ -125,5 +126,30 @@ describe('provider availability', () => {
     expect(cursor?.availability).toEqual({ type: 'INSTALLATION_FOUND' });
     expect(whichMock).toHaveBeenCalledWith('agent');
     expect(whichMock).not.toHaveBeenCalledWith('cursor-agent');
+  });
+
+  it('checks ACP availability per Provider when an executable path is overridden', async () => {
+    writeUserProviders([
+      {
+        id: 'qwen-code-acp-custom',
+        name: 'Qwen Code ACP Custom',
+        agentType: AgentType.QWEN_CODE,
+        runtimeType: RuntimeType.ACP,
+        env: { QWEN_PATH: '/mock/bin/qwen-custom' },
+        config: {},
+        isDefault: false,
+      },
+    ]);
+    reloadProviders();
+    whichMock.mockResolvedValue(null);
+
+    const results = await getAllProvidersAvailability();
+    const byId = new Map(results.map(item => [item.provider.id, item.availability]));
+
+    expect(byId.get('qwen-code-acp-default')).toEqual({
+      type: 'NOT_FOUND',
+      error: 'Qwen Code CLI was not found',
+    });
+    expect(byId.get('qwen-code-acp-custom')).toEqual({ type: 'INSTALLATION_FOUND' });
   });
 });

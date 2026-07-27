@@ -25,6 +25,10 @@ import {
   AGENT_TOWER_MCP_IDENTITY_ENV_KEYS,
   AGENT_TOWER_MCP_SERVICE_ENV_KEYS,
 } from './execution-env.js';
+import {
+  CODEX_OPENAI_COMPATIBLE_PROVIDER_ID,
+  CODEX_OPENAI_COMPATIBLE_PROVIDER_NAME,
+} from '../services/provider-effective-connection.service.js';
 
 /**
  * 将嵌套对象展平为 dotted path 键值对（递归到标量叶子）
@@ -532,6 +536,12 @@ export class CodexExecutor extends BaseExecutor {
           args.push('-c', `openai_base_url=${toTomlLiteral(connection.baseUrl)}`);
         } else {
           const providerKey = toTomlPathSegment(connection.modelProviderId);
+          if (connection.modelProviderId === CODEX_OPENAI_COMPATIBLE_PROVIDER_ID) {
+            args.push(
+              '-c', `model_providers.${providerKey}.name=${toTomlLiteral(CODEX_OPENAI_COMPATIBLE_PROVIDER_NAME)}`,
+              '-c', `model_providers.${providerKey}.wire_api=${toTomlLiteral('responses')}`,
+            );
+          }
           args.push('-c', `model_providers.${providerKey}.base_url=${toTomlLiteral(connection.baseUrl)}`);
           if (connection.envKey) {
             args.push('-c', `model_providers.${providerKey}.env_key=${toTomlLiteral(connection.envKey)}`);

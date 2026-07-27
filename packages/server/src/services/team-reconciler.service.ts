@@ -64,6 +64,8 @@ export interface TeamReconcilerSessionMessenger {
   sendMessage(sessionId: string, message: string): Promise<unknown>;
   stop?(sessionId: string, options?: { skipTeamRunReconcile?: boolean }): Promise<unknown>;
   hasActivePipeline?(sessionId: string): boolean;
+  hasActiveTurn?(sessionId: string): boolean;
+  isAwaitingPermission?(sessionId: string): boolean;
 }
 
 export interface TeamReconcilerDependencies {
@@ -435,8 +437,13 @@ export class TeamReconcilerService {
     if (!sessionId) {
       return;
     }
+    // Permission waits are an active turn controlled by the user. They do not
+    // count as agent silence and must not trigger an automated nudge.
+    if (this.sessionMessenger?.isAwaitingPermission?.(sessionId)) {
+      return;
+    }
     // 进程已不在内存管理中：交给首扫 orphan 或正常 exit 流程，避免运行期对刚退出瞬态的误判。
-    if (this.sessionMessenger?.hasActivePipeline && !this.sessionMessenger.hasActivePipeline(sessionId)) {
+    if (!this.hasActiveTurn(sessionId)) {
       return;
     }
 
@@ -496,7 +503,7 @@ export class TeamReconcilerService {
     if (isTaskDeleted(invocation.teamRun.task) || !invocation.sessionId) {
       return;
     }
-    const alive = this.sessionMessenger?.hasActivePipeline?.(invocation.sessionId) ?? false;
+    const alive = this.hasActiveTurn(invocation.sessionId);
     if (!alive) {
       await this.releaseStalledInvocation(invocation);
     }
@@ -556,7 +563,14 @@ export class TeamReconcilerService {
   }
 
   private isSessionPipelineMissing(sessionId: string): boolean {
-    return this.sessionMessenger?.hasActivePipeline?.(sessionId) === false;
+    return !this.hasActiveTurn(sessionId);
+  }
+
+  private hasActiveTurn(sessionId: string): boolean {
+    if (this.sessionMessenger?.hasActiveTurn) {
+      return this.sessionMessenger.hasActiveTurn(sessionId);
+    }
+    return this.sessionMessenger?.hasActivePipeline?.(sessionId) ?? false;
   }
 
   async maybeAdvanceTeamRunToReview(teamRunId: string): Promise<boolean> {

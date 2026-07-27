@@ -42,6 +42,42 @@
       "config": {},
       "isDefault": true,
       "builtIn": true
+    },
+    {
+      "id": "codex-acp-default",
+      "name": "Codex (ACP)",
+      "agentType": "CODEX",
+      "runtimeType": "ACP",
+      "env": {},
+      "config": {
+        "permissionMode": "ASK"
+      },
+      "isDefault": true,
+      "builtIn": true
+    },
+    {
+      "id": "claude-code-acp-default",
+      "name": "Claude Code (ACP)",
+      "agentType": "CLAUDE_CODE",
+      "runtimeType": "ACP",
+      "env": {},
+      "config": {
+        "permissionMode": "ASK"
+      },
+      "isDefault": true,
+      "builtIn": true
+    },
+    {
+      "id": "qwen-code-acp-default",
+      "name": "Qwen Code (ACP)",
+      "agentType": "QWEN_CODE",
+      "runtimeType": "ACP",
+      "env": {},
+      "config": {
+        "permissionMode": "ASK"
+      },
+      "isDefault": true,
+      "builtIn": true
     }
   ]
 }

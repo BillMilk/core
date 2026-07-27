@@ -22,7 +22,9 @@ import { Switch } from '@/components/ui/switch'
 import { Plus, Pencil, Trash2, CheckCircle2, XCircle, ChevronDown, Download, Upload, RotateCcw, AlertTriangle, Cpu, FlaskConical, KeyRound, Loader2 } from 'lucide-react'
 import {
   AgentType,
+  AGENT_RUNTIME_SUPPORT,
   PROVIDER_CAPABILITIES,
+  RuntimeType,
   type AppLocale,
   type ProviderBackupFile,
   type ProviderDraftInput,
@@ -101,6 +103,9 @@ const AGENT_CONFIG_FIELDS: Record<string, ConfigFieldMeta[]> = {
     { key: 'dangerouslyBypassApprovalsAndSandbox', label: '跳过所有确认和沙盒', type: 'switch' },
     { key: 'disableResponsesWebsocket', label: '禁用 WebSocket', type: 'switch' },
     { key: 'profile', label: 'Profile', type: 'input', placeholder: '~/.codex/config.toml 中的 profile 名称' },
+    APPEND_PROMPT_FIELD,
+  ],
+  [AgentType.QWEN_CODE]: [
     APPEND_PROMPT_FIELD,
   ],
 }
@@ -205,6 +210,29 @@ function hasSettingsPanel(agentType: AgentType): boolean {
   return agentType === AgentType.CLAUDE_CODE || agentType === AgentType.CODEX
 }
 
+const ACP_AGENT_OPTION_SUFFIX = '::ACP'
+
+function getProviderAgentOption(agentType: AgentType | string, runtimeType?: RuntimeType): string {
+  return runtimeType === RuntimeType.ACP
+    ? `${agentType}${ACP_AGENT_OPTION_SUFFIX}`
+    : String(agentType)
+}
+
+function getProviderAgentLabel(agentType: AgentType | string, runtimeType?: RuntimeType): string {
+  const label = getAgentLabel(agentType)
+  return runtimeType === RuntimeType.ACP ? `${label} (ACP)` : label
+}
+
+function parseProviderAgentOption(value: string): { agentType: AgentType; runtimeType: RuntimeType } {
+  if (value.endsWith(ACP_AGENT_OPTION_SUFFIX)) {
+    return {
+      agentType: value.slice(0, -ACP_AGENT_OPTION_SUFFIX.length) as AgentType,
+      runtimeType: RuntimeType.ACP,
+    }
+  }
+  return { agentType: value as AgentType, runtimeType: RuntimeType.CLI }
+}
+
 function removeClaudeEnvSetting(settings: string, key: string): string {
   if (!settings.trim()) return settings
   try {
@@ -226,6 +254,8 @@ const CONFIG_FIELD_LABELS: Record<string, string> = Object.values(AGENT_CONFIG_F
     return acc
   }, {})
 
+CONFIG_FIELD_LABELS.permissionMode = '权限策略'
+
 const CONFIG_FIELD_OPTION_LABELS: Record<string, Record<string, string>> = Object.values(AGENT_CONFIG_FIELDS)
   .flat()
   .reduce<Record<string, Record<string, string>>>((acc, field) => {
@@ -234,6 +264,11 @@ const CONFIG_FIELD_OPTION_LABELS: Record<string, Record<string, string>> = Objec
     }
     return acc
   }, {})
+
+CONFIG_FIELD_OPTION_LABELS.permissionMode = {
+  ASK: '每次询问',
+  AUTO_APPROVE: '自动批准',
+}
 
 function formatConfigValue(key: string, value: unknown): string {
   if (typeof value === 'boolean') return value ? translate('是') : translate('否')
@@ -330,6 +365,7 @@ function AvailabilityBadge({ type }: { type: string }) {
 export interface ProviderFormData {
   name: string
   agentType: AgentType
+  runtimeType: RuntimeType
   config: Record<string, unknown>
   settings: string
   env: ProviderEnvDraftRow[]
@@ -393,6 +429,7 @@ export function ProviderFormModal({
     initialData ?? {
       name: '',
       agentType: AgentType.CLAUDE_CODE,
+      runtimeType: RuntimeType.CLI,
       config: getDefaultConfigForAgentType(),
       settings: '',
       env: [],
@@ -423,6 +460,14 @@ export function ProviderFormModal({
     ? getApiBaseUrlValidationError(formData.simplified.apiBaseUrl)
     : null
   const permissionState = getExecutionPermissionState(formData.config, capability)
+  const rawAcpPermissionMode = formData.config.permissionMode ?? formData.config.acpPermissionMode
+  const acpPermissionMode = rawAcpPermissionMode === 'AUTO_APPROVE' ? 'AUTO_APPROVE' : 'ASK'
+  const acpPermissionModeError = formData.runtimeType === RuntimeType.ACP
+    && rawAcpPermissionMode !== undefined
+    && rawAcpPermissionMode !== 'ASK'
+    && rawAcpPermissionMode !== 'AUTO_APPROVE'
+    ? t('ACP 权限策略必须为 ASK 或 AUTO_APPROVE')
+    : null
   const websocketCapability = capability.disableResponsesWebsocket
   const websocketState = websocketCapability
     ? getProviderBooleanConfigState(formData.config, websocketCapability)
@@ -519,13 +564,18 @@ export function ProviderFormModal({
     })
   }
 
-  const handleAgentTypeChange = (type: AgentType) => {
+  const handleAgentTypeChange = (value: string) => {
     if (dirty && !window.confirm(t('切换 Agent 类型会清空当前类型的配置，是否继续？'))) return
-    const nextCapability = PROVIDER_CAPABILITIES[type]
+    const { agentType, runtimeType } = parseProviderAgentOption(value)
+    const nextCapability = PROVIDER_CAPABILITIES[agentType]
+    const config = runtimeType === RuntimeType.ACP
+      ? { permissionMode: 'ASK' }
+      : getDefaultConfigForAgentType()
     const next: ProviderFormData = {
       ...formData,
-      agentType: type,
-      config: getDefaultConfigForAgentType(),
+      agentType,
+      runtimeType,
+      config,
       settings: '',
       env: [],
       simplified: {
@@ -535,7 +585,7 @@ export function ProviderFormModal({
       },
     }
     commitDraftChange(() => next)
-    setConfigText('{}')
+    setConfigText(JSON.stringify(config, null, 2))
     setConfigError('')
     setSettingsError('')
     setSettingsTouched(false)
@@ -545,7 +595,7 @@ export function ProviderFormModal({
   }
 
   const validateAdvanced = (forTest = false): boolean => {
-    let valid = !configError && !permissionState.error && !websocketState?.error && !reasoningEffortError
+    let valid = !configError && !permissionState.error && !acpPermissionModeError && !websocketState?.error && !reasoningEffortError
     const settings = formData.settings.trim()
     if (settings && (settingsTouched || forTest)) {
       try {
@@ -575,6 +625,7 @@ export function ProviderFormModal({
       providerId,
       name: formData.name,
       agentType: formData.agentType,
+      runtimeType: formData.runtimeType,
       env,
       config: formData.config,
       settings: formData.settings,
@@ -589,6 +640,7 @@ export function ProviderFormModal({
     const draft = buildDraft()
     const data = { ...draft }
     delete data.providerId
+    if (providerId) delete data.runtimeType
     onSave(data)
   }
 
@@ -627,7 +679,7 @@ export function ProviderFormModal({
   )
   const apiKeyAdvancedManaged = apiKeyStatus === 'advanced'
   const keyConfigured = apiKeyStatus !== 'unconfigured'
-  const saveBlocked = !formData.name.trim() || !!apiBaseUrlError || !!configError || !!permissionState.error || !!websocketState?.error || !!reasoningEffortError || (!!settingsError && settingsTouched) || conflicts.length > 0
+  const saveBlocked = !formData.name.trim() || !!apiBaseUrlError || !!configError || !!permissionState.error || !!acpPermissionModeError || !!websocketState?.error || !!reasoningEffortError || (!!settingsError && settingsTouched) || conflicts.length > 0
 
   return (
     <>
@@ -638,7 +690,7 @@ export function ProviderFormModal({
       className="max-w-3xl"
       action={
         <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <Button variant="outline" onClick={handleTest} disabled={testProvider.isPending || !!apiBaseUrlError || !!configError || !!permissionState.error || !!websocketState?.error || !!reasoningEffortError || (!!settingsError && settingsTouched) || conflicts.length > 0}>
+          <Button variant="outline" onClick={handleTest} disabled={testProvider.isPending || !!apiBaseUrlError || !!configError || !!permissionState.error || !!acpPermissionModeError || !!websocketState?.error || !!reasoningEffortError || (!!settingsError && settingsTouched) || conflicts.length > 0}>
             {testProvider.isPending ? <Loader2 className="animate-spin" /> : <FlaskConical />}
             {testProvider.isPending ? t('测试中...') : t('测试配置')}
           </Button>
@@ -664,13 +716,15 @@ export function ProviderFormModal({
             <div>
               <label className="mb-1 block text-xs font-medium text-foreground">{t('Agent 类型')}</label>
               <Select
-                value={formData.agentType}
-                onChange={value => handleAgentTypeChange(value as AgentType)}
-                options={Object.values(AgentType).map(type => ({
-                  value: type,
-                  label: getAgentLabel(type),
-                  icon: <AgentLogo agentType={type} className="size-4" />,
-                }))}
+                value={getProviderAgentOption(formData.agentType, formData.runtimeType)}
+                onChange={handleAgentTypeChange}
+                options={Object.values(AgentType).flatMap(agentType => (
+                  AGENT_RUNTIME_SUPPORT[agentType].map(runtimeType => ({
+                    value: getProviderAgentOption(agentType, runtimeType),
+                    label: getProviderAgentLabel(agentType, runtimeType),
+                    icon: <AgentLogo agentType={agentType} className="size-4" />,
+                  }))
+                ))}
                 placeholder={t('选择 Agent 类型')}
               />
             </div>
@@ -680,7 +734,7 @@ export function ProviderFormModal({
               <label className="mb-1 block text-xs font-medium text-foreground">{t('Agent 类型')}</label>
               <div className="flex h-9 items-center gap-2 rounded-lg border border-neutral-200 bg-muted/30 px-3 text-sm text-muted-foreground">
                 <AgentLogo agentType={formData.agentType} className="size-4" />
-                <span className="min-w-0 truncate">{getAgentLabel(formData.agentType)}</span>
+                <span className="min-w-0 truncate">{getProviderAgentLabel(formData.agentType, formData.runtimeType)}</span>
               </div>
             </div>
           )}
@@ -701,6 +755,28 @@ export function ProviderFormModal({
 
         <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
           <div className="text-sm font-medium text-foreground">{t('基本配置')}</div>
+          {formData.runtimeType === RuntimeType.ACP && (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-foreground">{t('权限策略')}</label>
+              <Select
+                value={acpPermissionMode}
+                onChange={permissionMode => updateForm(previous => {
+                  const config: Record<string, unknown> = { ...previous.config, permissionMode }
+                  delete config.acpPermissionMode
+                  const next = { ...previous, config }
+                  setConfigText(JSON.stringify(next.config, null, 2))
+                  return next
+                })}
+                options={[
+                  { value: 'ASK', label: t('每次询问') },
+                  { value: 'AUTO_APPROVE', label: t('自动批准') },
+                ]}
+              />
+              {acpPermissionModeError && (
+                <p role="alert" className="mt-1 text-xs text-destructive">{acpPermissionModeError}</p>
+              )}
+            </div>
+          )}
           {capability.apiBaseUrl && !usesNativeCodexConnection && (
             <div>
               <label htmlFor="provider-api-url" className="mb-1 block text-xs font-medium text-foreground">{t('API 地址')}</label>
@@ -997,16 +1073,16 @@ export function ProviderFormModal({
         {showSettingsPanel && (
           <div className="border-t border-border pt-3">
             <label className="mb-2 block text-xs font-medium text-foreground">
-              {isCodex ? t('CLI 原生配置 (config.toml)') : t('CLI 原生配置 (settings.json)')}
+              {isCodex ? t('Agent 原生配置 (config.toml)') : t('Agent 原生配置 (settings.json)')}
             </label>
             <p className="text-xs text-muted-foreground mb-2">
               {isCodex ? (
                 <>
-                  {t('直接填写 Codex')} <code className="rounded bg-muted px-1">config.toml</code> {t('格式的配置片段，通过')} <code className="rounded bg-muted px-1">-c</code> {t('参数注入。不会修改你的')} <code className="rounded bg-muted px-1">~/.codex/config.toml</code> {t('文件。')}
+                  {t('直接填写 Codex')} <code className="rounded bg-muted px-1">config.toml</code> {t('格式的配置片段，由当前 Runtime 注入。不会修改你的')} <code className="rounded bg-muted px-1">~/.codex/config.toml</code> {t('文件。')}
                 </>
               ) : (
                 <>
-                  {t('对应 Claude Code 的')} <code className="rounded bg-muted px-1">~/.claude/settings.json</code>，{t('通过')} <code className="rounded bg-muted px-1">--settings</code> {t('参数注入。在')} <code className="rounded bg-muted px-1">env</code> {t('中设置 ANTHROPIC_API_KEY、ANTHROPIC_BASE_URL 等。')}
+                  {t('对应 Claude Code 的')} <code className="rounded bg-muted px-1">~/.claude/settings.json</code>，{t('由当前 Runtime 注入。在')} <code className="rounded bg-muted px-1">env</code> {t('中设置 ANTHROPIC_API_KEY、ANTHROPIC_BASE_URL 等。')}
                 </>
               )}
             </p>
@@ -1193,7 +1269,7 @@ function ImportPreviewModal({
                     </div>
                     <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
                       <AgentLogo agentType={item.incoming.agentType} className="size-3.5" />
-                      <span className="min-w-0 truncate">{getAgentLabel(item.incoming.agentType)}</span>
+                      <span className="min-w-0 truncate">{getProviderAgentLabel(item.incoming.agentType, item.incoming.runtimeType)}</span>
                       {' · '}
                       <code className="rounded bg-muted px-1 py-0.5">{item.incoming.id}</code>
                     </div>
@@ -1253,7 +1329,7 @@ function ProviderDetailPanel({
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span className="inline-flex min-w-0 items-center gap-1.5">
               <AgentLogo agentType={provider.agentType} className="size-3.5" />
-              <span className="truncate">{getAgentLabel(provider.agentType)}</span>
+              <span className="truncate">{getProviderAgentLabel(provider.agentType, provider.runtimeType)}</span>
             </span>
             {provider.isDefault && (
               <span className="rounded-full bg-primary/[0.06] px-2 py-0.5 text-[11px] font-medium text-primary">
@@ -1314,7 +1390,7 @@ function ProviderDetailPanel({
 
       {provider.settings?.trim() && (
         <div>
-          <SettingsSectionTitle className="mb-3">{t('CLI 配置')}</SettingsSectionTitle>
+          <SettingsSectionTitle className="mb-3">{t('Agent 原生配置')}</SettingsSectionTitle>
           <div className="rounded-lg border border-border bg-muted/40 p-4">
             <pre className="max-h-[200px] overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs text-muted-foreground">
               {provider.settings}
@@ -1325,7 +1401,7 @@ function ProviderDetailPanel({
 
       {configEntries.length === 0 && envKeys.length === 0 && !provider.settings?.trim() && (
         <div className="py-8 text-center text-sm text-muted-foreground">
-          {t('该 Provider 未配置额外参数。点击"编辑"添加运行配置、环境变量或 CLI 配置。')}
+          {t('该 Provider 未配置额外参数。点击"编辑"添加运行配置、环境变量或 Agent 原生配置。')}
         </div>
       )}
     </div>
@@ -1467,6 +1543,7 @@ export function ProviderSettingsPage() {
       data: {
         name: p.name,
         agentType: p.agentType as AgentType,
+        runtimeType: p.runtimeType === RuntimeType.ACP ? RuntimeType.ACP : RuntimeType.CLI,
         config: normalizeProviderConfig(p.agentType as AgentType, p.config),
         settings: p.settings ?? '',
         env: envEntries,
@@ -1550,7 +1627,7 @@ export function ProviderSettingsPage() {
                       className="size-3.5"
                       fallbackClassName={isActive ? 'text-primary-foreground/70' : 'text-muted-foreground'}
                     />
-                    <span className="min-w-0 truncate">{getAgentLabel(p.agentType)}</span>
+                    <span className="min-w-0 truncate">{getProviderAgentLabel(p.agentType, p.runtimeType)}</span>
                   </div>
                 </div>
                 {p.isDefault && (

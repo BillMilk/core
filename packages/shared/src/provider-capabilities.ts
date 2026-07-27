@@ -106,6 +106,17 @@ export const PROVIDER_CAPABILITIES: ProviderCapabilityMatrix = {
     model: { kind: 'config', path: 'model' },
     executionPermission: { kind: 'config', path: 'force', riskKind: 'force-execution' },
   },
+  [AgentType.QWEN_CODE]: {
+    agentType: AgentType.QWEN_CODE,
+    apiBaseUrl: {
+      kind: 'env',
+      path: 'OPENAI_BASE_URL',
+      placeholder: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    },
+    apiKey: { kind: 'env', path: 'OPENAI_API_KEY' },
+    model: { kind: 'config', path: 'model', placeholder: 'qwen3-coder-plus' },
+    executionPermission: { kind: 'config', path: 'yolo', riskKind: 'auto-approve' },
+  },
 }
 
 export function getProviderCapability(agentType: AgentType | string): ProviderCapability | undefined {

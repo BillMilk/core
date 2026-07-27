@@ -1,5 +1,6 @@
 export { LogStream } from './LogStream'
 export type { LogStreamHandle } from './LogStream'
+export { RuntimePermissionPrompt } from './RuntimePermissionPrompt'
 export { TodoPanel } from './TodoPanel'
 export { TokenUsageIndicator } from './TokenUsageBar'
 export { AgentSessionPanel } from './AgentSessionPanel'

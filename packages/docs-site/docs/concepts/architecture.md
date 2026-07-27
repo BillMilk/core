@@ -7,34 +7,71 @@ description: Agent Tower 当前代码库的真实架构。
 
 Agent Tower 是一个本地优先、单用户的 AI agent 调度平台。核心能力包括任务看板、Git worktree 隔离、实时终端/日志、Provider 管理、TeamRun 协作、MCP 集成、附件、预览代理、通知、移动端访问和桌面端壳。
 
-## 总览
+## 改造前：CLI Pipeline
 
 ```text
-┌─────────────────────────────────────────────────────────────────────┐
-│                           Browser / Mobile                         │
-│  React Router ─ TanStack Query ─ Zustand ─ Socket.IO Client        │
-│  Task Kanban ─ Task Detail ─ Log Stream ─ Workspace Panel          │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-                    HTTP REST + Socket.IO (/events)
-                               │
-┌──────────────────────────────┴──────────────────────────────────────┐
-│                         Fastify Application                         │
-│  Routes ─ Services ─ EventBus ─ SocketGateway ─ MCP HTTP Client    │
-│                                                                    │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │ SessionManager + AgentPipeline                              │   │
-│  │ PTY stdout/stderr -> Parser -> MsgStore -> JSON Patch -> UI │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                    │
-│  Executors: Claude Code / Gemini CLI / Cursor Agent / Codex        │
-│  Git: WorktreeManager / git-cli / merge / rebase / conflict check  │
-│  Extras: TeamRun / Tunnel / Notifications / Attachments / Preview  │
-│          Commit messages / Agent CLI environment bootstrap         │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-                     Prisma ORM + SQLite Database
+Web / Desktop
+      │ REST + Socket.IO
+      ▼
+SessionManager
+      │ 选择 Executor、维护 PTY/Pipeline、处理业务状态
+      ▼
+BaseExecutor -> PTY -> AgentPipeline -> Parser -> MsgStore -> EventBus
 ```
+
+这个结构把业务会话和 CLI 进程生命周期放在同一个模块中，适合单向读取 CLI 输出，但不适合需要双向请求、能力协商和权限响应的 ACP。
+
+## 当前架构：Runtime Core + Drivers
+
+```text
+┌──────────────────────────────────────────────────────────────────┐
+│ Web / Desktop                                                    │
+│ Provider 选择 Runtime · 日志/计划/工具 · Permission Prompt       │
+└───────────────────────────────┬──────────────────────────────────┘
+                                │ REST + Socket.IO (/events)
+                                ▼
+┌──────────────────────────────────────────────────────────────────┐
+│ SessionManager                                                   │
+│ Session/Task/TeamRun · Snapshot · Auto-commit · 结束后处理        │
+└───────────────────────────────┬──────────────────────────────────┘
+                                │ run / cancel / permission
+                                ▼
+┌──────────────────────────────────────────────────────────────────┐
+│ RuntimeCoordinator                                               │
+│ Tower session 隔离 · 单 active turn · 状态机 · 迟到事件过滤       │
+└───────────────────────┬───────────────────────┬──────────────────┘
+                        │                       │
+              ┌─────────▼─────────┐   ┌─────────▼──────────────┐
+              │ CLI Driver        │   │ Generic ACP Driver     │
+              │ Executor + PTY    │   │ ACP SDK + permission   │
+              │ Pipeline + Parser │   │ session new/load       │
+              └─────────┬─────────┘   └──────────┬─────────────┘
+                        │              ┌──────────▼─────────────┐
+                        │              │ ACP Agent Registry     │
+                        │              │ Codex / Claude / Qwen  │
+                        │              │ launch + config policy │
+                        │              └──────────┬─────────────┘
+                        └───────────┬─────────────┘
+                                    ▼
+                         MsgStore / Runtime events
+                                    │
+                                    ▼
+                         EventBus -> Socket -> UI
+```
+
+`AgentType` 表示 Codex、Claude Code 等 Agent 身份；`RuntimeType` 表示 `CLI` 或 `ACP` 执行协议。Provider 同时选择二者，创建 Session 时会固化 Runtime，已有 Session 不会因为后来修改 Provider 而静默切换协议。
+
+ACP Driver 本身不包含 Codex、Claude Code 或 Qwen Code 的专属启动逻辑。它只管理协议连接和通用生命周期，并从 `AcpAgentRegistry` 取得对应 Agent Definition。Definition 负责 Provider 投影、可执行文件解析、adapter/原生 ACP 启动、Session metadata、模型和权限模式配置。新增 ACP Agent 时通常只增加 Definition 和 Provider 能力，不复制 RuntimeCoordinator 或 ACP Driver。
+
+当前 Runtime 支持矩阵：
+
+| Agent | CLI | ACP |
+| --- | --- | --- |
+| Claude Code | 是 | 是 |
+| Gemini CLI | 是 | 否 |
+| Cursor Agent | 是 | 否 |
+| Codex | 是 | 是 |
+| Qwen Code | 否 | 是 |
 
 ## 技术栈
 
@@ -46,9 +83,9 @@ Agent Tower 是一个本地优先、单用户的 AI agent 调度平台。核心�
 | 实时通信 | Socket.IO 4 |
 | 后端 | Fastify 4 |
 | 数据库 | Prisma 5 + SQLite |
-| 进程管理 | node-pty |
+| 进程管理 | node-pty + ACP adapter process manager |
 | Git | 原生 git CLI 封装 |
-| 协议扩展 | MCP SDK |
+| 协议扩展 | MCP SDK + Agent Client Protocol SDK |
 | 包管理 | pnpm monorepo |
 
 ## Monorepo 结构
@@ -79,6 +116,7 @@ agent-tower/
 | `src/services` | 项目、任务、工作区、会话、团队协作、终端、通知、隧道、预览代理等业务逻辑 |
 | `src/core` | 轻量容器与进程内 EventBus |
 | `src/pipeline` | AgentPipeline，负责单个 session 的 PTY 生命周期 |
+| `src/runtime` | RuntimeCoordinator、CLI Driver、通用 ACP Driver、ACP Agent Registry、进程与事件投影 |
 | `src/output` | agent 输出解析、MsgStore、JSON Patch、Todo/Token 提取 |
 | `src/executors` | Claude Code、Gemini CLI、Cursor Agent、Codex 执行器 |
 | `src/socket` | Socket.IO namespace、room 转发、订阅协议 |
@@ -107,13 +145,12 @@ agent-tower/
 | `src/lib/socket` | Socket 连接和订阅 |
 | `src/stores` | UI 状态与 agent 状态 |
 
-## Session Pipeline
+## Runtime 输出链路
 
 ```text
-PTY.onData
-  -> MsgStore.pushStdout()
-  -> Parser.processData()
-  -> MsgStore.pushPatch()
+CLI: PTY -> AgentPipeline -> Parser ─┐
+                                     ├-> MsgStore JSON Patch
+ACP: adapter/native ACP -> protocol update -> Projector ───┘
   -> EventBus.emit('session:patch')
   -> SocketGateway 转发到 /events namespace
   -> 前端增量更新日志 / Todo / token usage
@@ -121,10 +158,12 @@ PTY.onData
 
 关键点：
 
-- `MsgStore` 保存 stdout、patch、sessionId 等消息，并能重建快照
-- 快照会被 debounce 持久化到数据库
+- `MsgStore` 保存 patch、sessionId 以及 CLI raw stdout，并能重建快照
+- ACP stdout 是协议帧，不作为用户日志广播或写入快照
+- 快照按低频 checkpoint 持久化，终态会强制 flush
 - parser 会尽量把原始终端输出结构化为标准化消息
-- 不同 agent 的输出格式不同，结构化能力取决于对应 parser
+- ACP Projector 把 message、tool、plan 和 usage 映射到相同的标准化消息
+- Runtime state 通过 REST 恢复，Socket 事件只负责实时通知和缓存失效
 
 ## TeamRun 协作
 

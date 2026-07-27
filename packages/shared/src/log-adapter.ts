@@ -12,7 +12,8 @@ export enum LogType {
   Tool = 'Tool',         // ▶ Tool Call
   User = 'User',         // User Message
   Cursor = 'Cursor',     // █ Output Cursor
-  Error = 'Error'        // ✗ Error Message
+  Error = 'Error',       // ✗ Error Message
+  Warning = 'Warning'    // ! Non-blocking Warning
 }
 
 export interface LogEntry {
@@ -27,7 +28,12 @@ export interface LogEntry {
     action?: ActionType
     name?: string
     id?: string
+    kind?: string
     status?: ToolStatus
+    content?: ToolContent[]
+    locations?: ToolLocation[]
+    inputSummary?: string
+    outputSummary?: string
   }
   tokenUsage?: {
     totalTokens: number
@@ -48,6 +54,7 @@ export type NormalizedEntryType =
   | 'tool_use'
   | 'system_message'
   | 'error_message'
+  | 'warning_message'
   | 'thinking'
   | 'loading'
   | 'next_action'
@@ -67,11 +74,25 @@ export type ActionType =
 
 export type ToolStatus =
   | 'created'
+  | 'pending'
+  | 'in_progress'
   | 'success'
   | 'failed'
   | 'denied'
   | 'pending_approval'
   | 'timed_out'
+
+export type ToolContent =
+  | { type: 'text'; text: string }
+  | { type: 'resource_link'; uri: string; name?: string }
+  | { type: 'diff'; path: string; oldText?: string; newText: string }
+  | { type: 'terminal'; terminalId: string }
+  | { type: 'unsupported'; contentType: string }
+
+export interface ToolLocation {
+  path: string
+  line?: number
+}
 
 export interface NormalizedEntry {
   id: string
@@ -82,7 +103,12 @@ export interface NormalizedEntry {
     action?: ActionType
     toolName?: string
     toolId?: string
+    toolKind?: string
     status?: ToolStatus
+    toolContent?: ToolContent[]
+    toolLocations?: ToolLocation[]
+    toolInputSummary?: string
+    toolOutputSummary?: string
     fileChanges?: Array<{
       type: 'write' | 'delete' | 'rename' | 'edit'
       path: string
@@ -96,6 +122,7 @@ export interface NormalizedEntry {
       modelContextWindow?: number
     }
     error?: string
+    warning?: string
     /** Agent todo list (for todo_management action) */
     todos?: Array<{ content: string; status: string; priority?: string | null }>
     todoOperation?: string
@@ -126,7 +153,13 @@ function getToolTitle(entry: NormalizedEntry): string {
     other: 'Action',
   }
 
-  const label = action ? actionLabels[action] : toolName
+  // ACP supplies a human-readable title separately from its semantic kind.
+  // Keep legacy parser labels stable while preferring the richer ACP title.
+  const label = entry.metadata?.toolKind
+    ? toolName
+    : action
+      ? actionLabels[action]
+      : toolName
 
   // 添加状态后缀
   if (status === 'success') {
@@ -191,7 +224,12 @@ export function normalizedEntryToLogEntry(entry: NormalizedEntry): LogEntry | nu
           action: entry.metadata?.action,
           name: entry.metadata?.toolName,
           id: entry.metadata?.toolId,
+          kind: entry.metadata?.toolKind,
           status: entry.metadata?.status,
+          content: entry.metadata?.toolContent,
+          locations: entry.metadata?.toolLocations,
+          inputSummary: entry.metadata?.toolInputSummary,
+          outputSummary: entry.metadata?.toolOutputSummary,
         },
       }
 
@@ -200,6 +238,14 @@ export function normalizedEntryToLogEntry(entry: NormalizedEntry): LogEntry | nu
         id: entry.id,
         timestamp: entry.timestamp,
         type: LogType.Error,
+        content: entry.content,
+      }
+
+    case 'warning_message':
+      return {
+        id: entry.id,
+        timestamp: entry.timestamp,
+        type: LogType.Warning,
         content: entry.content,
       }
 

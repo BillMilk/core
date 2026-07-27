@@ -4,11 +4,13 @@ import { AgentLogo } from '@/components/agent'
 import { truncateMiddle } from '@/lib/utils'
 import type { ProviderWithAvailability } from '@/hooks/use-providers'
 import { useI18n } from '@/lib/i18n'
+import { RuntimeType } from '@agent-tower/shared'
 
 interface ProviderSelectorProps {
   providers: ProviderWithAvailability[]
   currentProviderId: string | null
   agentType: string
+  runtimeType?: RuntimeType | string
   onSelect: (providerId: string) => void
 }
 
@@ -16,15 +18,18 @@ export function ProviderSelector({
   providers,
   currentProviderId,
   agentType,
+  runtimeType,
   onSelect,
 }: ProviderSelectorProps) {
   const { t } = useI18n()
   const [isOpen, setIsOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  // 筛选同 agentType 的 providers
+  const effectiveRuntimeType = runtimeType === RuntimeType.ACP ? RuntimeType.ACP : RuntimeType.CLI
+  // Session follow-up cannot switch Agent identity or Runtime.
   const filteredProviders = providers.filter(
     (p) => String(p.provider.agentType) === agentType
+      && (p.provider.runtimeType === RuntimeType.ACP ? RuntimeType.ACP : RuntimeType.CLI) === effectiveRuntimeType
   )
 
   // 当前选中的 provider

@@ -40,6 +40,7 @@ export const queryKeys = {
   sessions: {
     all: ['sessions'] as const,
     detail: (id: string) => ['sessions', 'detail', id] as const,
+    runtime: (id: string) => ['sessions', 'runtime', id] as const,
   },
 
   conversations: {

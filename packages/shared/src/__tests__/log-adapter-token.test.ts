@@ -70,3 +70,57 @@ describe('Feature: token-usage-display, Property 4: LogAdapter Token 转换正�
     expect(logEntry!.tokenUsage!.modelContextWindow).toBeUndefined()
   })
 })
+
+describe('ACP tool log projection', () => {
+  it('prefers the ACP display title and forwards structured tool details', () => {
+    const entry: NormalizedEntry = {
+      id: 'acp-tool-1',
+      timestamp: 123,
+      entryType: 'tool_use',
+      content: 'Output\ndone',
+      metadata: {
+        action: 'command_run',
+        toolName: 'Read browser skill',
+        toolId: 'tool-1',
+        toolKind: 'execute',
+        status: 'success',
+        toolContent: [{ type: 'text', text: 'done' }],
+        toolLocations: [{ path: '/tmp/example.ts', line: 12 }],
+        toolInputSummary: '{"path":"/tmp/example.ts"}',
+        toolOutputSummary: 'done',
+      },
+    }
+
+    expect(normalizedEntryToLogEntry(entry)).toMatchObject({
+      title: 'Read browser skill ✓',
+      tool: {
+        name: 'Read browser skill',
+        kind: 'execute',
+        status: 'success',
+        content: [{ type: 'text', text: 'done' }],
+        locations: [{ path: '/tmp/example.ts', line: 12 }],
+        inputSummary: '{"path":"/tmp/example.ts"}',
+        outputSummary: 'done',
+      },
+    })
+  })
+
+  it('maps non-blocking runtime diagnostics to warning logs', () => {
+    const entry: NormalizedEntry = {
+      id: 'acp-warning-1',
+      timestamp: 456,
+      entryType: 'warning_message',
+      content: 'MCP server `agent-tower` failed to start: connection closed',
+      metadata: {
+        warning: 'MCP server `agent-tower` failed to start: connection closed',
+      },
+    }
+
+    expect(normalizedEntryToLogEntry(entry)).toEqual({
+      id: 'acp-warning-1',
+      timestamp: 456,
+      type: 'Warning',
+      content: 'MCP server `agent-tower` failed to start: connection closed',
+    })
+  })
+})

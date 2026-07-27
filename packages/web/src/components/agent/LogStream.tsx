@@ -84,16 +84,21 @@ function requiresUserAction(log: LogEntry): boolean {
 
 function isMainlineLog(log: LogEntry): boolean {
   if (log.type === LogType.Cursor) return true
-  if (log.type === LogType.User || log.type === LogType.Assistant || isThinkingLog(log)) return true
-  if (log.type === LogType.Error) return true
+  if (log.type === LogType.User || log.type === LogType.Assistant) return true
+  if (log.type === LogType.Error || log.type === LogType.Warning) return true
   if (log.type === LogType.Info && log.tokenUsage) return false
   return requiresUserAction(log)
 }
 
 function isExecutionDetailLog(log: LogEntry): boolean {
+  if (isThinkingLog(log)) return true
   if (isExistingToolGroup(log)) return false
   if (log.type !== LogType.Tool && log.type !== LogType.Action) return false
   return !isMainlineLog(log)
+}
+
+function isToolDetailLog(log: LogEntry): boolean {
+  return !isThinkingLog(log) && (log.type === LogType.Tool || log.type === LogType.Action)
 }
 
 /** Group consecutive non-mainline logs into execution-detail segments */
@@ -119,7 +124,11 @@ function groupExecutionDetails(logs: LogEntry[]): RenderItem[] {
         }
       }
 
-      items.push({ kind: 'execution-group', logs: group, key: group[0].id })
+      if (group.some(isToolDetailLog)) {
+        items.push({ kind: 'execution-group', logs: group, key: group[0].id })
+      } else {
+        group.forEach((item) => items.push({ kind: 'single', log: item, key: item.id }))
+      }
       i = j
     } else {
       items.push({ kind: 'single', log, key: log.id })
@@ -298,6 +307,16 @@ const ThinkingBlock = memo(({ content, isOpenDefault = true }: { content: string
 })
 ThinkingBlock.displayName = 'ThinkingBlock'
 
+function firstLine(value: string, maxLength = 140): string {
+  return (value.split('\n')[0] || '').slice(0, maxLength)
+}
+
+function toolDisplayTitle(log: LogEntry): string {
+  const title = log.title?.replace(/\s*[✓✗]$/, '').replace(/\s*\(待审批\)$/, '')
+  if (log.tool?.kind) return log.tool.name || title || 'Tool'
+  return firstLine(log.content, 140) || log.tool?.name || title || 'Tool'
+}
+
 // 3. Tool / Action — 内联文本样式，去除边框噪音
 const ToolBlock = memo(({ title, content, type }: { title: string; content: string; type: LogType }) => {
   const [isOpen, setIsOpen] = useState(false)
@@ -364,20 +383,16 @@ ToolBlock.displayName = 'ToolBlock'
 const ExecutionDetailsGroup = memo(({ logs }: { logs: LogEntry[] }) => {
   const { t } = useI18n()
   const [isOpen, setIsOpen] = useState(false)
-
-  // 提取文件名摘要
-  const summaries = logs.map((log) => {
-    const firstLine = log.content.split('\n')[0] || ''
-    const pathMatch = firstLine.match(/([^/\\]+\.[a-zA-Z0-9]+)/)
-    return pathMatch ? pathMatch[1] : firstLine.slice(0, 40)
-  })
-
-  const detailCount = logs.length
+  const toolLogs = logs.filter(isToolDetailLog)
+  const summaries = toolLogs.map((log) => toolDisplayTitle(log))
+  const detailCount = toolLogs.length
 
   return (
     <div className="my-2">
       <button
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
+        aria-expanded={isOpen}
         className="group flex items-center gap-1.5 py-1 text-xs w-full text-left transition-colors"
       >
         <span className="shrink-0 w-3.5 h-3.5 flex items-center justify-center transition-transform duration-200" style={{ transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>
@@ -391,7 +406,7 @@ const ExecutionDetailsGroup = memo(({ logs }: { logs: LogEntry[] }) => {
         </span>
         {!isOpen && (
           <span className="truncate text-neutral-300 font-mono">
-            {summaries.slice(0, 3).join(', ')}{logs.length > 3 ? ' …' : ''}
+            {summaries.slice(0, 3).join(', ')}{toolLogs.length > 3 ? ' …' : ''}
           </span>
         )}
       </button>
@@ -399,10 +414,10 @@ const ExecutionDetailsGroup = memo(({ logs }: { logs: LogEntry[] }) => {
       {isOpen && (
         <div className="ml-5 mt-0.5 mb-1.5">
           {logs.map((log) => {
-            const firstLine = log.content.split('\n')[0] || ''
-            return (
-              <ToolGroupItem key={log.id} log={log} firstLine={firstLine} />
-            )
+            if (isThinkingLog(log)) {
+              return <ThinkingBlock key={log.id} content={log.content} isOpenDefault={false} />
+            }
+            return <ToolGroupItem key={log.id} log={log} title={toolDisplayTitle(log)} />
           })}
         </div>
       )}
@@ -412,9 +427,9 @@ const ExecutionDetailsGroup = memo(({ logs }: { logs: LogEntry[] }) => {
 ExecutionDetailsGroup.displayName = 'ExecutionDetailsGroup'
 
 /** Single item inside a ToolGroup — expandable for full content */
-const ToolGroupItem = memo(({ log, firstLine }: { log: LogEntry; firstLine: string }) => {
+const ToolGroupItem = memo(({ log, title }: { log: LogEntry; title: string }) => {
   const [isDetailOpen, setIsDetailOpen] = useState(false)
-  const hasMultiLineContent = log.content.includes('\n')
+  const hasDetailContent = Boolean(log.content.trim()) && log.content.trim() !== title.trim()
 
   const isSuccess = isToolSuccess(log)
   const isFailed = isToolFailure(log) || log.type === LogType.Error
@@ -422,9 +437,11 @@ const ToolGroupItem = memo(({ log, firstLine }: { log: LogEntry; firstLine: stri
   return (
     <div>
       <button
-        onClick={() => hasMultiLineContent && setIsDetailOpen(!isDetailOpen)}
+        type="button"
+        onClick={() => hasDetailContent && setIsDetailOpen(!isDetailOpen)}
+        aria-expanded={hasDetailContent ? isDetailOpen : undefined}
         className={`group flex items-center gap-1.5 py-0.5 text-xs w-full text-left ${
-          hasMultiLineContent ? 'cursor-pointer' : 'cursor-default'
+          hasDetailContent ? 'cursor-pointer' : 'cursor-default'
         }`}
       >
         <span className="shrink-0 w-3.5 h-3.5 flex items-center justify-center">
@@ -436,14 +453,14 @@ const ToolGroupItem = memo(({ log, firstLine }: { log: LogEntry; firstLine: stri
             <span className="w-1 h-1 rounded-full bg-neutral-300" />
           )}
         </span>
-        <span className="truncate text-neutral-400 font-mono">{firstLine}</span>
-        {hasMultiLineContent && (
+        <span className="truncate text-neutral-400 font-mono">{title}</span>
+        {hasDetailContent && (
           <span className="ml-auto shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-neutral-300">
             {isDetailOpen ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
           </span>
         )}
       </button>
-      {isDetailOpen && (
+      {isDetailOpen && hasDetailContent && (
         <div className="ml-5 mt-0.5 mb-1 rounded-md bg-neutral-50 border border-neutral-100 overflow-x-auto">
           <code className="block p-2.5 text-[11px] font-mono text-neutral-500 leading-relaxed whitespace-pre-wrap break-all">
             {log.content}
@@ -483,6 +500,19 @@ const ErrorMessage = memo(({ content }: { content: string }) => (
   </div>
 ))
 ErrorMessage.displayName = 'ErrorMessage'
+
+// 6b. Warning Message — 非阻塞诊断，使用低强度黄色提示
+const WarningMessage = memo(({ content }: { content: string }) => (
+  <div className="my-2 rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-3">
+    <div className="flex items-start gap-2">
+      <svg className="shrink-0 mt-0.5 w-4 h-4 text-amber-500" viewBox="0 0 16 16" fill="currentColor">
+        <path fillRule="evenodd" d="M7.13 2.05a1 1 0 011.74 0l5.55 9.87A1 1 0 0113.55 13H2.45a1 1 0 01-.87-1.08l5.55-9.87zM7.25 6a.75.75 0 011.5 0v2.5a.75.75 0 01-1.5 0V6zM8 11.25a.75.75 0 100-1.5.75.75 0 000 1.5z" clipRule="evenodd" />
+      </svg>
+      <pre className="text-xs text-amber-800 leading-relaxed whitespace-pre-wrap break-all min-w-0">{content}</pre>
+    </div>
+  </div>
+))
+WarningMessage.displayName = 'WarningMessage'
 
 const ProcessedGroup = memo(({
   logs,
@@ -679,6 +709,9 @@ function renderItem(
 
     case LogType.Error:
       return <ErrorMessage content={log.content} />
+
+    case LogType.Warning:
+      return <WarningMessage content={log.content} />
 
     case LogType.Cursor:
       return <ThinkingIndicator activity={log.cursorActivity} />

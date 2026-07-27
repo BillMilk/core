@@ -8,6 +8,7 @@
 import { readdirSync, chmodSync, statSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { patchClaudeAgentAcp } from './patch-claude-agent-acp.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const NODE_PTY_PATH_RE = /(^|[\\/])(?:@shitiandmw[\\/])?node-pty(?:[\\/]|$)/;
@@ -120,3 +121,7 @@ function fixSpawnHelperPermissions() {
   }
 }
 fixSpawnHelperPermissions();
+const claudePatch = await patchClaudeAgentAcp();
+if (claudePatch.changed) {
+  console.log(`[postinstall] 已修复 Claude ACP 网关 context-window 探测: ${claudePatch.adapterPath}`);
+}

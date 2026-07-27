@@ -14,6 +14,7 @@ import {
 import { LogStream } from '@/components/agent'
 import { TodoPanel } from '@/components/agent'
 import { TokenUsageIndicator } from '@/components/agent'
+import { RuntimePermissionPrompt } from '@/components/agent'
 import { IconRunning, IconReview, IconPending, IconDone, IconCancelled } from '@/components/agent'
 import { Paperclip, ArrowUp, ArrowDown, ArrowLeft, Play, Square, Code2, Trash2, MoreVertical, RotateCcw, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -36,7 +37,7 @@ import { useNormalizedLogs } from '@/lib/socket/hooks/useNormalizedLogs'
 import { useWorkspaceSetupProgress } from '@/lib/socket/hooks/useWorkspaceSetupProgress'
 import { socketManager } from '@/lib/socket/manager'
 import { useGitVisibilityStore } from '@/stores/git-visibility-store'
-import { useSendMessage, useStopSession, useStartSession } from '@/hooks/use-sessions'
+import { useSendMessage, useSessionActivity, useStopSession, useStartSession } from '@/hooks/use-sessions'
 import { useRetryTask, useTaskBody } from '@/hooks/use-tasks'
 import { useProviders } from '@/hooks/use-providers'
 import { useTodos } from '@/hooks/use-todos'
@@ -436,7 +437,10 @@ export function TaskDetail({ task, onDeleteTask, isDeleting, onTaskStatusChange,
   const handleOpenDisplayedSessionPreviewUrl = useCallback((url: string) => {
     handleOpenPreviewUrl(url, displayedSessionWorkspaceId)
   }, [displayedSessionWorkspaceId, handleOpenPreviewUrl])
-  const isSessionActive = displayedSession?.status === SessionStatus.RUNNING || displayedSession?.status === SessionStatus.PENDING
+  const { isActive: isSessionActive, isCancelling: isSessionCancelling } = useSessionActivity(
+    displayedSession?.id ?? '',
+    displayedSession?.status,
+  )
   const isProjectReadOnly = Boolean(task?.projectArchivedAt)
   const isProjectRepoDeleted = Boolean(task?.projectRepoDeletedAt)
   const projectReadOnlyMessage = isProjectRepoDeleted
@@ -1365,6 +1369,7 @@ export function TaskDetail({ task, onDeleteTask, isDeleting, onTaskStatusChange,
           >
             <div className="max-w-4xl mx-auto">
               {workspaceChangeSummaryBar}
+              {logSessionId ? <RuntimePermissionPrompt sessionId={logSessionId} /> : null}
               <div
                 ref={inputContainerRef}
                 className={`relative bg-background rounded-xl border hover:border-ring/40 focus-within:border-ring/60 transition-colors duration-200 ${
@@ -1420,6 +1425,7 @@ export function TaskDetail({ task, onDeleteTask, isDeleting, onTaskStatusChange,
                       providers={providers}
                       currentProviderId={selectedProviderId}
                       agentType={activeSession.agentType}
+                      runtimeType={activeSession.runtimeType}
                       onSelect={setSelectedProviderId}
                     />
                   )}
@@ -1427,7 +1433,7 @@ export function TaskDetail({ task, onDeleteTask, isDeleting, onTaskStatusChange,
                   {isSessionActive && !input.trim() && !hasAttachments ? (
                     <button
                       onClick={handleStop}
-                      disabled={stopSession.isPending}
+                      disabled={stopSession.isPending || isSessionCancelling}
                       className="p-2 rounded-lg transition-all duration-200 bg-destructive text-white hover:bg-destructive/90 disabled:opacity-50"
                     >
                       <Square size={14} />

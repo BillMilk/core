@@ -1,0 +1,25 @@
+import { AgentType } from '../types/index.js';
+import {
+  createClaudeCodeParser,
+  createCodexParser,
+  createCursorAgentParser,
+  type MsgStore,
+} from '../output/index.js';
+import type { OutputParser } from '../pipeline/agent-pipeline.js';
+
+export function createCliParser(
+  agentType: AgentType,
+  workingDir: string,
+  msgStore: MsgStore,
+): OutputParser | null {
+  if (agentType === AgentType.CLAUDE_CODE) {
+    return createClaudeCodeParser(msgStore);
+  }
+  if (agentType === AgentType.CURSOR_AGENT) {
+    return createCursorAgentParser(msgStore, workingDir);
+  }
+  if (agentType === AgentType.CODEX) {
+    return createCodexParser(msgStore);
+  }
+  return null;
+}

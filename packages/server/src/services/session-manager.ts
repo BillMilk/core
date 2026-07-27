@@ -2,31 +2,22 @@ import { prisma } from '../utils/index.js';
 import type { Prisma } from '@prisma/client';
 import { AgentType, SessionStatus, SessionPurpose, TaskStatus, SessionContext } from '../types/index.js';
 import {
-  getExecutor,
-  getExecutorByProvider,
   getProviderById,
   ExecutionEnv,
-  ExecutorConfigurationError,
-  ExecutorNotFoundError,
   normalizeExecutorStartError,
 } from '../executors/index.js';
 import { filterAgentSubprocessExternalEnv } from '../executors/execution-env.js';
 import {
   sessionMsgStoreManager,
-  createClaudeCodeParser,
-  createCursorAgentParser,
-  createCodexParser,
   createUserMessage,
   addNormalizedEntry,
 } from '../output/index.js';
 import type { NormalizedConversation } from '../output/index.js';
-import type { BaseExecutor, SpawnedChild, CancellationToken } from '../executors/index.js';
-import { AgentPipeline, type OutputParser } from '../pipeline/agent-pipeline.js';
 import { execGit } from '../git/git-cli.js';
 import type { EventBus } from '../core/event-bus.js';
 import { getCommitMessageService } from '../core/container.js';
 import { TeamReconcilerService } from './team-reconciler.service.js';
-import { NotFoundError } from '../errors.js';
+import { NotFoundError, ValidationError } from '../errors.js';
 import { ensureTaskNotDeleted } from './deleted-task-guard.js';
 import {
   getWorkspaceWorkingDir,
@@ -35,6 +26,17 @@ import {
 import { writeErrorLog } from '../utils/error-log.js';
 import { INTERNAL_API_TOKEN_ENV, readInternalApiTokenFromEnv } from '../utils/internal-api-token.js';
 import { createHash } from 'node:crypto';
+import { RuntimeType, supportsAgentRuntime, type RuntimeStateDto } from '@agent-tower/shared';
+import { getProviderRuntimeType } from '../executors/providers.js';
+import {
+  CliRuntimeDriver,
+  AcpRuntimeDriver,
+  RuntimeCoordinator,
+  StaticRuntimeRegistry,
+  setRuntimeStateSnapshot,
+  type RuntimeProcessEvent,
+  type RuntimeTurnEventEnvelope,
+} from '../runtime/index.js';
 
 const DEBUG_SNAPSHOT = process.env.DEBUG_SNAPSHOT === 'true';
 
@@ -83,12 +85,9 @@ type SessionExecutionRecord = Prisma.SessionGetPayload<{
 }>;
 
 export class SessionManager {
-  private pipelines = new Map<string, AgentPipeline>();
-  private pendingSpawns = new Map<string, SpawnedChild>();
-  private cancelTokens = new Map<string, CancellationToken>();
   private snapshotFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private snapshotFlushChains = new Map<string, Promise<void>>();
-  private snapshotWriterChain: Promise<void> = Promise.resolve();
+  private sessionPersistenceWriterChain: Promise<void> = Promise.resolve();
   private dirtySnapshots = new Set<string>();
   private persistedSnapshotHashes = new Map<string, string>();
   private pendingSnapshotStatus = new Map<string, SessionStatus>();
@@ -107,13 +106,15 @@ export class SessionManager {
   private followUpReservationReleases = new Set<() => void>();
   /** Incremented for every start/send cycle so late post-processing cannot affect a new turn. */
   private sessionGenerations = new Map<string, number>();
-  private logicalCompletionCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
   // 每个 session 上次写入 TeamRun 心跳时间戳的时刻，用于节流 lastHeartbeatAt 落库。
   private heartbeatThrottle = new Map<string, number>();
   private readonly teamReconciler: TeamReconcilerService;
+  private readonly runtimeCoordinator: RuntimeCoordinator;
+  private readonly runtimeProcessIds = new Map<string, string>();
+  private readonly runtimePermissionStates = new Map<string, boolean>();
+  private readonly externalSessionPersistence = new Map<string, Promise<void>>();
   private static readonly SNAPSHOT_CHECKPOINT_MS = 15_000;
   private static readonly HEARTBEAT_THROTTLE_MS = 30_000;
-  private static readonly CODEX_TURN_COMPLETION_GRACE_MS = 250;
 
   constructor(private readonly eventBus: EventBus, teamReconciler?: TeamReconcilerService) {
     this.teamReconciler = teamReconciler ?? new TeamReconcilerService({
@@ -123,6 +124,17 @@ export class SessionManager {
       // session 退出时的首次 reconcile（COMPLETED 判定 / 首次补催）仍即时执行，不依赖该定时器。
       scheduleReminders: false,
     });
+    this.runtimeCoordinator = new RuntimeCoordinator(
+      new StaticRuntimeRegistry([
+        new CliRuntimeDriver(),
+        new AcpRuntimeDriver(),
+      ]),
+      {
+        onTurnEvent: (event) => this.handleRuntimeTurnEvent(event),
+        onRuntimeState: (state) => this.handleRuntimeState(state),
+        onProcessEvent: (event) => this.handleRuntimeProcessEvent(event),
+      },
+    );
 
     // Patches only mark the snapshot dirty. A low-frequency checkpoint keeps the
     // hot stream away from SQLite while terminal paths still force a final flush.
@@ -145,7 +157,6 @@ export class SessionManager {
       // The parser has already written raw stdout, the final assistant entry,
       // usage and all other state from the turn.completed chunk at this point.
       this.terminalSessions.set(sessionId, SessionStatus.COMPLETED);
-      this.scheduleLogicalCompletionCleanup(sessionId);
       this.startSessionFinalization(sessionId, 0, { logicalCompletion: true });
     });
 
@@ -155,32 +166,7 @@ export class SessionManager {
       // without an exit code. Use a synthetic non-zero code for the shared
       // finalization path so success-only post-processing cannot run.
       this.terminalSessions.set(sessionId, SessionStatus.FAILED);
-      this.scheduleLogicalCompletionCleanup(sessionId);
       this.startSessionFinalization(sessionId, 1, { logicalCompletion: true });
-    });
-
-    this.eventBus.on('session:exit', ({ sessionId, exitCode }) => {
-      const terminalStatus = this.terminalSessions.get(sessionId);
-      this.clearLogicalCompletionCleanup(sessionId);
-      const pipeline = this.pipelines.get(sessionId);
-      if (DEBUG_SNAPSHOT) {
-        console.log(`[SessionManager:snapshot] session:exit sessionId=${sessionId} exitCode=${exitCode} hasPipeline=${Boolean(pipeline)}`);
-      }
-      if (pipeline) {
-        // Must call destroy() to remove MsgStore onPatch/onSessionId listeners.
-        // Without this, stale listeners accumulate across send/exit cycles and
-        // each subsequent pushPatch() forwards the same patch N times.
-        pipeline.destroy();
-        this.pipelines.delete(sessionId);
-      }
-      this.cancelTokens.delete(sessionId);
-      this.heartbeatThrottle.delete(sessionId);
-      if (terminalStatus) return;
-      this.terminalSessions.set(
-        sessionId,
-        typeof exitCode === 'number' && exitCode !== 0 ? SessionStatus.FAILED : SessionStatus.COMPLETED,
-      );
-      this.startSessionFinalization(sessionId, exitCode);
     });
 
     // NOTE: checkTaskAutoRevert is called directly (awaited) inside start()
@@ -197,6 +183,14 @@ export class SessionManager {
     });
   }
 
+  getRuntimeState(sessionId: string, runtimeType: RuntimeType = RuntimeType.CLI): RuntimeStateDto {
+    return this.runtimeCoordinator.getState(sessionId, runtimeType);
+  }
+
+  async resolveRuntimePermission(sessionId: string, requestId: string, optionId: string): Promise<void> {
+    await this.runtimeCoordinator.resolvePermission(sessionId, requestId, optionId);
+  }
+
   async create(workspaceId: string, agentType: AgentType, prompt: string, variant: string = 'DEFAULT', providerId?: string) {
     const workspace = await prisma.workspace.findUnique({
       where: { id: workspaceId },
@@ -207,11 +201,26 @@ export class SessionManager {
     }
     ensureTaskNotDeleted(workspace.task);
 
+    const provider = providerId ? getProviderById(providerId) : null;
+    if (providerId && !provider) {
+      throw new ValidationError(`Provider not found: ${providerId}`);
+    }
+    if (provider && provider.agentType !== agentType) {
+      throw new ValidationError(
+        `Provider '${provider.name}' belongs to agent '${provider.agentType}', not '${agentType}'`,
+      );
+    }
+    const runtimeType = provider ? getProviderRuntimeType(provider) : RuntimeType.CLI;
+    if (!supportsAgentRuntime(agentType, runtimeType)) {
+      throw new ValidationError(`Agent '${agentType}' does not support the '${runtimeType}' runtime`);
+    }
+
     return prisma.session.create({
       data: {
         workspaceId,
         context: SessionContext.WORKSPACE,
         agentType,
+        runtimeType,
         variant,
         providerId: providerId ?? null,
         prompt,
@@ -241,44 +250,7 @@ export class SessionManager {
       workingDir,
     });
 
-    const agentType = session.agentType as AgentType;
-    const executor = this.resolveExecutor(agentType, session.variant, session.providerId);
-
-    console.log('[SessionManager] ✅ Executor found, spawning process...');
-
-    const env = ExecutionEnv.default(workingDir);
-
-    // 如果有 provider，注入 provider 的环境变量
-    if (session.providerId) {
-      const provider = getProviderById(session.providerId);
-      if (provider && Object.keys(provider.env).length > 0) {
-        env.merge(filterAgentSubprocessExternalEnv(provider.env));
-      }
-    }
-
-    this.injectAgentTowerMcpServiceEnv(env);
-    if (!this.isConversationSession(session)) {
-      await this.injectTeamRunInvocationEnv(id, env);
-    }
-
-    let spawnResult: SpawnedChild;
-    try {
-      spawnResult = await executor.spawn({
-        workingDir,
-        prompt: session.prompt,
-        env,
-      });
-    } catch (error) {
-      this.logSessionError('session.spawn', error, {
-        sessionId: id,
-        agentType: session.agentType,
-        providerId: session.providerId,
-        workingDir,
-      });
-      throw normalizeExecutorStartError(error);
-    }
-
-    await this.activateSpawnedSession(id, agentType, workingDir, spawnResult);
+    await this.startRuntimeTurn(session, session.prompt, session.externalSessionId);
     return session;
   }
 
@@ -297,10 +269,11 @@ export class SessionManager {
 
     const resumeFromSession = await prisma.session.findUnique({
       where: { id: resumeFromSessionId },
-      select: { logSnapshot: true },
+      select: { logSnapshot: true, externalSessionId: true },
     });
     const agentSessionId = resumeFromSession
-      ? this.resolveAgentSessionId(resumeFromSessionId, resumeFromSession.logSnapshot)
+      ? resumeFromSession.externalSessionId
+        ?? this.resolveAgentSessionId(resumeFromSessionId, resumeFromSession.logSnapshot)
       : null;
 
     console.log('[SessionManager] Follow-up session details:', {
@@ -313,81 +286,7 @@ export class SessionManager {
       workingDir: this.getExecutionWorkingDir(session),
     });
 
-    const agentType = session.agentType as AgentType;
-    const executor = this.resolveExecutor(agentType, session.variant, session.providerId);
-
-    const workingDir = this.getExecutionWorkingDir(session);
-    const env = ExecutionEnv.default(workingDir);
-
-    if (session.providerId) {
-      const provider = getProviderById(session.providerId);
-      if (provider && Object.keys(provider.env).length > 0) {
-        env.merge(filterAgentSubprocessExternalEnv(provider.env));
-      }
-    }
-
-    this.injectAgentTowerMcpServiceEnv(env);
-    if (!this.isConversationSession(session)) {
-      await this.injectTeamRunInvocationEnv(id, env);
-    }
-
-    const spawnConfig = {
-      workingDir,
-      prompt: session.prompt,
-      env,
-    };
-
-    let spawnResult: SpawnedChild;
-    if (agentSessionId && executor.spawnFollowUp) {
-      try {
-        spawnResult = await executor.spawnFollowUp(spawnConfig, agentSessionId);
-      } catch (error) {
-        console.warn(
-          `[SessionManager] Follow-up spawn failed for ${id}, falling back to a new agent session:`,
-          error instanceof Error ? error.message : error
-        );
-        writeErrorLog({
-          level: 'warn',
-          source: 'session.spawnFollowUpResume',
-          message: `Follow-up spawn failed for session ${id}; falling back to a new agent session`,
-          error,
-          metadata: {
-            sessionId: id,
-            resumeFromSessionId,
-            agentType: session.agentType,
-            providerId: session.providerId,
-            workingDir,
-          },
-        });
-        try {
-          spawnResult = await executor.spawn(spawnConfig);
-        } catch (fallbackError) {
-          this.logSessionError('session.spawnFollowUpFallback', fallbackError, {
-            sessionId: id,
-            resumeFromSessionId,
-            agentType: session.agentType,
-            providerId: session.providerId,
-            workingDir,
-          });
-          throw normalizeExecutorStartError(fallbackError);
-        }
-      }
-    } else {
-      try {
-        spawnResult = await executor.spawn(spawnConfig);
-      } catch (error) {
-        this.logSessionError('session.spawnFollowUp', error, {
-          sessionId: id,
-          resumeFromSessionId,
-          agentType: session.agentType,
-          providerId: session.providerId,
-          workingDir,
-        });
-        throw normalizeExecutorStartError(error);
-      }
-    }
-
-    await this.activateSpawnedSession(id, agentType, workingDir, spawnResult);
+    await this.startRuntimeTurn(session, session.prompt, agentSessionId);
     return session;
   }
 
@@ -425,6 +324,11 @@ export class SessionManager {
             `Cannot switch provider: agentType mismatch. Session uses '${session.agentType}', but provider '${effectiveProvider.name}' is for '${effectiveProvider.agentType}'`
           );
         }
+        if (getProviderRuntimeType(effectiveProvider) !== this.normalizeRuntimeType(session.runtimeType)) {
+          throw new Error(
+            `Cannot switch provider: runtimeType mismatch. Session uses '${session.runtimeType}', but provider '${effectiveProvider.name}' uses '${getProviderRuntimeType(effectiveProvider)}'`
+          );
+        }
       }
 
       if (providerId && providerId !== session.providerId) {
@@ -443,18 +347,15 @@ export class SessionManager {
       this.invalidateSessionGeneration(id);
       this.beginSessionExecution(id);
 
-    // Destroying the residual PTY before waiting for the completed generation's
-    // auto-commit prevents a late exit event from being mistaken for the new
-    // generation while the Git boundary is in flight.
-    const existing = this.pipelines.get(id);
-    if (existing) {
+    // Stop the previous turn before waiting for its auto-commit boundary. The
+    // coordinator suppresses that superseded turn's terminal event so it cannot
+    // finalize the newly reserved generation.
+    if (this.runtimeCoordinator.hasActiveTurn(id)) {
       if (DEBUG_SNAPSHOT) {
-        console.log(`[SessionManager:snapshot] sendMessage checkpoint before pipeline replace sessionId=${id}`);
+        console.log(`[SessionManager:snapshot] sendMessage checkpoint before runtime turn replace sessionId=${id}`);
       }
       await this.flushSnapshotPersist(id);
-      existing.destroy();
-      this.pipelines.delete(id);
-      this.cancelTokens.delete(id);
+      await this.runtimeCoordinator.abandonTurn(id);
     }
     await this.waitForPendingAutoCommit(id);
 
@@ -499,76 +400,12 @@ export class SessionManager {
     // the user-message patch would never reach WebSocket subscribers.
     this.eventBus.emit('session:patch', { sessionId: id, patch: userPatch, seq: userPatchSeq });
 
-      const agentSessionId = this.resolveAgentSessionId(id, session.logSnapshot);
-      const agentType = session.agentType as AgentType;
-      const executor = this.resolveExecutor(agentType, session.variant, effectiveProviderId);
-
-    const workingDir = this.getExecutionWorkingDir(session);
-    const env = ExecutionEnv.default(workingDir);
-
-    // 如果有 provider，注入 provider 的环境变量
-    if (effectiveProviderId) {
-      const provider = getProviderById(effectiveProviderId);
-      if (provider && Object.keys(provider.env).length > 0) {
-        env.merge(filterAgentSubprocessExternalEnv(provider.env));
+      const agentSessionId = session.externalSessionId
+        ?? this.resolveAgentSessionId(id, session.logSnapshot);
+      if (providerId && providerId !== session.providerId) {
+        await this.runtimeCoordinator.disposeSession(id);
       }
-    }
-
-    this.injectAgentTowerMcpServiceEnv(env);
-    if (!this.isConversationSession(session)) {
-      await this.injectTeamRunInvocationEnv(id, env);
-    }
-
-    const spawnConfig = {
-      workingDir,
-      prompt: message,
-      env,
-    };
-
-    let spawnResult: SpawnedChild;
-    if (agentSessionId && executor.spawnFollowUp) {
-      try {
-        spawnResult = await executor.spawnFollowUp(spawnConfig, agentSessionId);
-      } catch (resumeError) {
-        writeErrorLog({
-          level: 'warn',
-          source: 'session.messageSpawnResume',
-          message: `Message follow-up spawn failed for session ${id}; falling back to a new agent session`,
-          error: resumeError,
-          metadata: {
-            sessionId: id,
-            agentType: session.agentType,
-            providerId: effectiveProviderId,
-            workingDir,
-          },
-        });
-        try {
-          spawnResult = await executor.spawn(spawnConfig);
-        } catch (error) {
-          this.logSessionError('session.messageSpawnFallback', error, {
-            sessionId: id,
-            agentType: session.agentType,
-            providerId: effectiveProviderId,
-            workingDir,
-          });
-          throw normalizeExecutorStartError(error);
-        }
-      }
-    } else {
-      try {
-        spawnResult = await executor.spawn(spawnConfig);
-      } catch (error) {
-        this.logSessionError('session.messageSpawn', error, {
-          sessionId: id,
-          agentType: session.agentType,
-          providerId: effectiveProviderId,
-          workingDir,
-        });
-        throw normalizeExecutorStartError(error);
-      }
-    }
-
-      await this.activateSpawnedSession(id, agentType, workingDir, spawnResult);
+      await this.startRuntimeTurn(session, message, agentSessionId, effectiveProviderId);
       return session;
     } finally {
       reservation.release();
@@ -580,19 +417,19 @@ export class SessionManager {
     if (!session) return null;
 
     const terminalStatus = this.terminalSessions.get(id);
+    const hasActiveTurn = this.runtimeCoordinator.hasActiveTurn(id);
     const persistedTerminal = [
       SessionStatus.COMPLETED,
       SessionStatus.FAILED,
       SessionStatus.CANCELLED,
     ].includes(session.status as SessionStatus);
-    if (terminalStatus || persistedTerminal) {
+    if (!hasActiveTurn && (terminalStatus || persistedTerminal)) {
       const pendingFinalization = this.sessionFinalizations.get(id);
       // A terminal transition already won the race. A late user stop may
       // clean up the PTY, but it must not regress the persisted status. The
       // backing TeamRun invocation may still be waiting for a room reply, so
       // it must still pass through the cancellation reconciler.
-      this.clearLogicalCompletionCleanup(id);
-      this.destroyActivePipeline(id);
+      await this.runtimeCoordinator.disposeSession(id);
       this.maybeClearTerminalState(id);
       await pendingFinalization;
       if (!options.skipTeamRunReconcile && !this.isConversationSession(session)) {
@@ -600,35 +437,14 @@ export class SessionManager {
       }
       return session;
     }
-    this.clearLogicalCompletionCleanup(id);
     this.terminalSessions.set(id, SessionStatus.CANCELLED);
 
-    const pendingSpawn = this.pendingSpawns.get(id);
-    if (pendingSpawn) {
-      this.pendingSpawns.delete(id);
-      try {
-        pendingSpawn.cancel?.cancel();
-      } catch {
-        // ignore cancellation failures for pending spawns
-      }
-      try {
-        pendingSpawn.pty.kill();
-      } catch {
-        // ignore kill errors for pending spawns
-      }
-    }
-
-    const pipeline = this.pipelines.get(id);
-    if (pipeline) {
-      // Try graceful shutdown via SIGINT first
-      const cancel = this.cancelTokens.get(id);
-      if (cancel) {
-        cancel.cancel();
-      }
-      pipeline.destroy();
-      this.pipelines.delete(id);
-      this.cancelTokens.delete(id);
-    }
+    await this.runtimeCoordinator.cancelTurn(id).catch((error) => {
+      this.logSessionError('session.runtimeCancel', error, { sessionId: id });
+    });
+    await this.runtimeCoordinator.disposeSession(id).catch((error) => {
+      this.logSessionError('session.runtimeDispose', error, { sessionId: id });
+    });
 
     const msgStore = sessionMsgStoreManager.get(id);
     if (msgStore) {
@@ -653,20 +469,24 @@ export class SessionManager {
       await this.teamReconciler.handleSessionStopped(id);
     }
     this.eventBus.emit('session:stopped', { sessionId: id });
-    // stop() 路径不会触发 session:exit（pipeline.destroy 先于 PTY 退出，
-    // onExit 被 destroyed 标志短路），handleSessionExit 不会执行，
-    // 因此在这里释放 MsgStore。快照已在上方持久化（CANCELLED）。
+    // Cancellation does not run normal terminal finalization, so release the
+    // store after the CANCELLED snapshot has been persisted above.
     sessionMsgStoreManager.delete(id);
     this.releaseSnapshotPersistenceState(id);
     return session;
   }
 
-  /**
-   * 是否仍持有该 session 的活跃 PTY pipeline。
-   * 供 TeamRun 心跳 watchdog 判断 invocation 是真卡死（pipeline 存活）还是孤儿（进程已脱管）。
-   */
+  /** @deprecated Use hasActiveTurn(). */
   hasActivePipeline(sessionId: string): boolean {
-    return this.pipelines.has(sessionId);
+    return this.runtimeCoordinator.hasActiveTurn(sessionId);
+  }
+
+  hasActiveTurn(sessionId: string): boolean {
+    return this.runtimeCoordinator.hasActiveTurn(sessionId);
+  }
+
+  isAwaitingPermission(sessionId: string): boolean {
+    return this.runtimeCoordinator.isAwaitingPermission(sessionId);
   }
 
   /**
@@ -692,37 +512,18 @@ export class SessionManager {
   }
 
   writeInput(sessionId: string, data: string): void {
-    const pipeline = this.pipelines.get(sessionId);
-    if (!pipeline) return;
-    pipeline.write(data);
+    this.runtimeCoordinator.writeInput(sessionId, data);
   }
 
   resize(sessionId: string, cols: number, rows: number): void {
-    const pipeline = this.pipelines.get(sessionId);
-    if (!pipeline) return;
-    pipeline.resize(cols, rows);
+    this.runtimeCoordinator.resize(sessionId, cols, rows);
   }
 
-  /**
-   * Destroy all active pipelines. Called on graceful server shutdown.
-   */
-  destroyAll(): void {
-    if (this.pipelines.size > 0) {
-      console.log(`[SessionManager] Destroying all ${this.pipelines.size} active pipelines`);
-    }
-    for (const [sessionId, pipeline] of this.pipelines) {
-      const cancel = this.cancelTokens.get(sessionId);
-      if (cancel) {
-        cancel.cancel();
-      }
-      pipeline.destroy();
-    }
-    this.pipelines.clear();
-    this.cancelTokens.clear();
-    for (const timer of this.logicalCompletionCleanupTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.logicalCompletionCleanupTimers.clear();
+  /** Close all runtime driver sessions during graceful server shutdown. */
+  async destroyAll(): Promise<void> {
+    await this.runtimeCoordinator.destroyAll();
+    await Promise.allSettled(this.externalSessionPersistence.values());
+    this.externalSessionPersistence.clear();
     this.terminalSessions.clear();
     for (const resolve of this.pendingAutoCommitResolvers.values()) resolve();
     this.pendingAutoCommitResolvers.clear();
@@ -750,193 +551,214 @@ export class SessionManager {
     return null;
   }
 
-  private resolveExecutor(
-    agentType: AgentType,
-    variant: string | null,
-    providerId?: string | null,
-  ): BaseExecutor {
-    let executor: BaseExecutor | undefined;
-    try {
-      executor = providerId
-        ? getExecutorByProvider(providerId)
-        : getExecutor(agentType, variant ?? 'DEFAULT');
-    } catch (error) {
-      throw new ExecutorConfigurationError(agentType, error, providerId);
-    }
-    if (!executor) {
-      throw new ExecutorNotFoundError(agentType, providerId);
-    }
-    return executor;
-  }
-
-  private async activateSpawnedSession(
-    sessionId: string,
-    agentType: AgentType,
-    workingDir: string,
-    spawnResult: SpawnedChild,
+  private async startRuntimeTurn(
+    session: SessionExecutionRecord,
+    prompt: string,
+    resumeExternalSessionId?: string | null,
+    providerId: string | null = session.providerId,
   ): Promise<void> {
-    try {
-      await this.registerSpawnedSessionIfTaskLive(sessionId, spawnResult);
-      this.attachPipeline(sessionId, agentType, workingDir, spawnResult);
-      this.pendingSpawns.delete(sessionId);
-      this.eventBus.emit('session:started', { sessionId });
-      await this.checkTaskAutoRevert(sessionId);
-    } catch (error) {
-      await this.cancelSpawnedSession(sessionId, spawnResult);
-      throw error;
-    }
-  }
-
-  private attachPipeline(
-    sessionId: string,
-    agentType: AgentType,
-    workingDir: string,
-    spawnResult: SpawnedChild
-  ): void {
-    const msgStore = sessionMsgStoreManager.getOrCreate(sessionId);
-    const parser = this.createParser(agentType, workingDir, msgStore);
-    // takeEarlyEvents 交回 spawn→attach 窗口内触发的 PTY data/exit 事件；
-    // AgentPipeline 构造时同步重放，避免快速退出的进程丢失 exit（session 永久 RUNNING）。
-    const pipeline = new AgentPipeline(
-      sessionId,
-      spawnResult.pty,
-      parser,
-      msgStore,
-      this.eventBus,
-      spawnResult.takeEarlyEvents?.(),
-    );
-    // 重放的 exit 会让 pipeline 在构造期间就自毁；已死的 pipeline 不能进 map，
-    // 否则 hasActivePipeline 会误报存活。
-    if (pipeline.isAlive) {
-      this.pipelines.set(sessionId, pipeline);
-      if (spawnResult.cancel) {
-        this.cancelTokens.set(sessionId, spawnResult.cancel);
+    const workingDir = this.getExecutionWorkingDir(session);
+    const env = ExecutionEnv.default(workingDir);
+    if (providerId) {
+      const provider = getProviderById(providerId);
+      if (provider && Object.keys(provider.env).length > 0) {
+        env.merge(filterAgentSubprocessExternalEnv(provider.env));
       }
     }
+    this.injectAgentTowerMcpServiceEnv(env);
+    if (!this.isConversationSession(session)) {
+      await this.injectTeamRunInvocationEnv(session.id, env);
+    }
+
+    const isNewStore = !sessionMsgStoreManager.has(session.id);
+    const msgStore = sessionMsgStoreManager.getOrCreate(session.id);
+    if (isNewStore && session.logSnapshot) {
+      try {
+        msgStore.restoreFromSnapshot(JSON.parse(session.logSnapshot) as NormalizedConversation);
+      } catch (error) {
+        this.logSessionError('session.snapshotRestore', error, { sessionId: session.id });
+      }
+    }
+
+    try {
+      // Session status follows the logical Runtime turn, not the lifetime of
+      // its backing OS process. ACP reuses one adapter process across turns,
+      // so a follow-up must become RUNNING even when no process starts.
+      await prisma.session.update({
+        where: { id: session.id },
+        data: { status: SessionStatus.RUNNING },
+      });
+      const handle = await this.runtimeCoordinator.startTurn({
+        towerSessionId: session.id,
+        agentType: session.agentType as AgentType,
+        runtimeType: this.normalizeRuntimeType(session.runtimeType),
+        variant: session.variant ?? 'DEFAULT',
+        providerId,
+        workingDir,
+        env,
+        externalSessionId: session.externalSessionId,
+        msgStore,
+        prompt,
+        resumeExternalSessionId,
+      });
+      // Terminal persistence is driven by Runtime turn events. Attach a catch
+      // so the public start/message methods do not leave a rejected handle
+      // unobserved after they have returned to the HTTP caller.
+      void handle.completion.catch(() => undefined);
+      this.eventBus.emit('session:started', { sessionId: session.id });
+      await this.checkTaskAutoRevert(session.id);
+    } catch (error) {
+      await this.runtimeCoordinator.disposeSession(session.id).catch(() => undefined);
+      await prisma.session.update({
+        where: { id: session.id },
+        data: { status: SessionStatus.CANCELLED },
+      }).catch(() => undefined);
+      sessionMsgStoreManager.delete(session.id);
+      this.releaseSnapshotPersistenceState(session.id);
+      this.logSessionError('session.runtimeStart', error, {
+        sessionId: session.id,
+        agentType: session.agentType,
+        runtimeType: session.runtimeType,
+        providerId,
+        workingDir,
+      });
+      throw normalizeExecutorStartError(error);
+    }
   }
 
-  private async registerSpawnedSessionIfTaskLive(
-    sessionId: string,
-    spawnResult: SpawnedChild,
-  ): Promise<void> {
-    this.pendingSpawns.set(sessionId, spawnResult);
-    try {
-      await prisma.$transaction(async (tx) => {
+  private handleRuntimeTurnEvent(envelope: RuntimeTurnEventEnvelope): void {
+    const sessionId = envelope.towerSessionId;
+    const event = envelope.event;
+    if (event.type === 'stdout') {
+      this.eventBus.emit('session:stdout', { sessionId, data: event.data });
+      return;
+    }
+    if (event.type === 'conversation_patch') {
+      this.eventBus.emit('session:patch', { sessionId, patch: event.patch, seq: event.seq });
+      return;
+    }
+    if (event.type === 'external_session_id') {
+      const previous = this.externalSessionPersistence.get(sessionId) ?? Promise.resolve();
+      const persistence = previous
+        .then(() => this.enqueueSessionPersistenceWrite(async () => {
+          await prisma.session.update({
+            where: { id: sessionId },
+            data: { externalSessionId: event.externalSessionId },
+          });
+        }))
+        .then(() => undefined)
+        .catch((error) => {
+          this.logSessionError('session.externalSessionId', error, { sessionId });
+        });
+      this.externalSessionPersistence.set(sessionId, persistence);
+      void persistence.finally(() => {
+        if (this.externalSessionPersistence.get(sessionId) === persistence) {
+          this.externalSessionPersistence.delete(sessionId);
+        }
+      });
+      this.eventBus.emit('session:sessionId', {
+        sessionId,
+        agentSessionId: event.externalSessionId,
+      });
+      return;
+    }
+    if (event.type === 'permission_requested') {
+      this.eventBus.emit('session:permission_requested', {
+        sessionId,
+        permission: event.request,
+      });
+      return;
+    }
+    if (event.type === 'permission_invalidated') {
+      this.eventBus.emit('session:permission_invalidated', {
+        sessionId,
+        turnId: envelope.turnId,
+        requestId: event.requestId,
+      });
+      return;
+    }
+    if (event.type === 'completed') {
+      this.eventBus.emit('session:turn-completed', { sessionId });
+      this.eventBus.emit('session:exit', { sessionId, exitCode: 0 });
+      return;
+    }
+    if (event.type === 'failed') {
+      this.eventBus.emit('session:turn-failed', { sessionId });
+      this.eventBus.emit('session:exit', { sessionId, exitCode: 1 });
+    }
+  }
+
+  private handleRuntimeState(state: RuntimeStateDto): void {
+    setRuntimeStateSnapshot(state);
+    this.eventBus.emit('session:runtime_state_changed', {
+      sessionId: state.sessionId,
+      state,
+    });
+    const awaitingPermission = state.turnState === 'AWAITING_PERMISSION';
+    const previous = this.runtimePermissionStates.get(state.sessionId) ?? false;
+    if (state.turnState === 'DISPOSED') {
+      this.runtimePermissionStates.delete(state.sessionId);
+    } else {
+      this.runtimePermissionStates.set(state.sessionId, awaitingPermission);
+    }
+    if (previous !== awaitingPermission) {
+      void this.invalidateTeamRunRuntimeState(state.sessionId);
+    }
+  }
+
+  private async invalidateTeamRunRuntimeState(sessionId: string): Promise<void> {
+    const invocation = await prisma.agentInvocation.findFirst({
+      where: { sessionId },
+      select: {
+        teamRunId: true,
+        teamRun: { select: { taskId: true, task: { select: { projectId: true } } } },
+      },
+    });
+    if (!invocation) return;
+    this.eventBus.emit('team-run:invalidated', {
+      teamRunId: invocation.teamRunId,
+      taskId: invocation.teamRun.taskId,
+      projectId: invocation.teamRun.task.projectId,
+      scopes: ['team-members', 'agent-invocations', 'team-run'],
+      reason: 'agent-invocation-updated',
+    });
+  }
+
+  private async handleRuntimeProcessEvent(event: RuntimeProcessEvent): Promise<void> {
+    if (event.type === 'started') {
+      const processRecord = await prisma.$transaction(async (tx) => {
         const session = await tx.session.findUnique({
-          where: { id: sessionId },
+          where: { id: event.towerSessionId },
           include: { workspace: { include: { task: true } }, conversation: true },
         });
-        if (!session) {
-          throw new NotFoundError('Session', sessionId);
-        }
-
-        if (this.isConversationSession(session)) {
-          if (!session.conversation || session.conversation.deletedAt) {
-            throw new NotFoundError('Conversation', session.conversationId ?? sessionId);
-          }
-        } else {
-          if (!session.workspace) {
-            throw new NotFoundError('Workspace', session.workspaceId ?? sessionId);
-          }
-          ensureTaskNotDeleted(session.workspace.task);
-        }
-
-        await tx.session.update({
-          where: { id: sessionId },
-          data: { status: SessionStatus.RUNNING },
-        });
-
-        await tx.executionProcess.create({
-          data: {
-            sessionId,
-            pid: spawnResult.pid,
-          },
+        if (!session) throw new NotFoundError('Session', event.towerSessionId);
+        this.ensureExecutionRecordIsLive(session);
+        return tx.executionProcess.create({
+          data: { sessionId: event.towerSessionId, pid: event.pid },
+          select: { id: true },
         });
       });
-      const session = await prisma.session.findUnique({
-        where: { id: sessionId },
-        include: { workspace: { include: { task: true } }, conversation: true },
+      this.runtimeProcessIds.set(event.runtimeInstanceId, processRecord.id);
+      return;
+    }
+
+    const processId = this.runtimeProcessIds.get(event.runtimeInstanceId);
+    if (!processId) return;
+    this.runtimeProcessIds.delete(event.runtimeInstanceId);
+    await prisma.executionProcess.update({
+      where: { id: processId },
+      data: { exitCode: event.exitCode },
+    }).catch((error) => {
+      this.logSessionError('session.processExit', error, {
+        sessionId: event.towerSessionId,
+        processId,
+        exitCode: event.exitCode,
       });
-      if (!session) {
-        throw new NotFoundError('Session', sessionId);
-      }
-      if (this.isConversationSession(session)) {
-        if (!session.conversation || session.conversation.deletedAt) {
-          throw new NotFoundError('Conversation', session.conversationId ?? sessionId);
-        }
-      } else {
-        if (!session.workspace) {
-          throw new NotFoundError('Workspace', session.workspaceId ?? sessionId);
-        }
-        ensureTaskNotDeleted(session.workspace.task);
-      }
-      if (this.pendingSpawns.get(sessionId) !== spawnResult) {
-        throw new NotFoundError(
-          this.isConversationSession(session) ? 'Conversation' : 'Task',
-          this.isConversationSession(session)
-            ? (session.conversationId ?? sessionId)
-            : (session.workspace?.task.id ?? sessionId),
-        );
-      }
-    } catch (error) {
-      await this.cancelSpawnedSession(sessionId, spawnResult);
-      throw error;
-    }
+    });
   }
 
-  private async cancelSpawnedSession(
-    sessionId: string,
-    spawnResult: SpawnedChild,
-  ): Promise<void> {
-    if (this.pendingSpawns.get(sessionId) === spawnResult) {
-      this.pendingSpawns.delete(sessionId);
-    }
-    const pipeline = this.pipelines.get(sessionId);
-    if (pipeline) {
-      try {
-        pipeline.destroy();
-      } catch {
-        // Continue with explicit PTY cancellation even if pipeline teardown fails.
-      }
-      this.pipelines.delete(sessionId);
-      this.cancelTokens.delete(sessionId);
-    }
-    try {
-      spawnResult.cancel?.cancel();
-    } catch {
-      // ignore cancellation failures while compensating a deleted task race
-    }
-    try {
-      spawnResult.pty.kill();
-    } catch {
-      // ignore kill failures while compensating a deleted task race
-    }
-    await prisma.session.update({
-      where: { id: sessionId },
-      data: { status: SessionStatus.CANCELLED },
-    }).catch(() => {
-      // session may already have been removed by cleanup
-    });
-    await prisma.executionProcess.deleteMany({
-      where: { sessionId, pid: spawnResult.pid },
-    }).catch(() => {
-      // process row may not have been created yet
-    });
-    // 补偿路径同样释放 MsgStore（sendMessage 在 spawn 前已 getOrCreate）
-    sessionMsgStoreManager.delete(sessionId);
-  }
-
-  private createParser(agentType: AgentType, workingDir: string, msgStore: ReturnType<typeof sessionMsgStoreManager.getOrCreate>): OutputParser | null {
-    if (agentType === AgentType.CLAUDE_CODE) {
-      return createClaudeCodeParser(msgStore);
-    }
-    if (agentType === AgentType.CURSOR_AGENT) {
-      return createCursorAgentParser(msgStore, workingDir);
-    }
-    if (agentType === AgentType.CODEX) {
-      return createCodexParser(msgStore);
-    }
-    return null;
+  private normalizeRuntimeType(value: unknown): RuntimeType {
+    return value === RuntimeType.ACP ? RuntimeType.ACP : RuntimeType.CLI;
   }
 
   private injectAgentTowerMcpServiceEnv(env: ExecutionEnv): void {
@@ -1083,7 +905,7 @@ export class SessionManager {
       .catch(() => {
         // Keep the chain alive even if previous flush failed.
       })
-      .then(() => this.enqueueSnapshotWrite(() => this.persistSnapshot(sessionId)));
+      .then(() => this.enqueueSessionPersistenceWrite(() => this.persistSnapshot(sessionId)));
 
     this.snapshotFlushChains.set(sessionId, current);
     try {
@@ -1095,19 +917,19 @@ export class SessionManager {
     }
   }
 
-  private async enqueueSnapshotWrite(write: () => Promise<void>): Promise<void> {
-    const queued = this.snapshotWriterChain
+  private async enqueueSessionPersistenceWrite(write: () => Promise<void>): Promise<void> {
+    const queued = this.sessionPersistenceWriterChain
       .catch(() => {
         // Keep the global writer alive after an isolated persistence failure.
       })
       .then(write);
-    this.snapshotWriterChain = queued;
+    this.sessionPersistenceWriterChain = queued;
 
     try {
       await queued;
     } finally {
-      if (this.snapshotWriterChain === queued) {
-        this.snapshotWriterChain = Promise.resolve();
+      if (this.sessionPersistenceWriterChain === queued) {
+        this.sessionPersistenceWriterChain = Promise.resolve();
       }
     }
   }
@@ -1366,6 +1188,7 @@ export class SessionManager {
     options: { logicalCompletion?: boolean; generation?: number } = {},
   ): Promise<void> {
     const generation = options.generation ?? this.sessionGenerations.get(sessionId);
+    await this.externalSessionPersistence.get(sessionId);
     const session = await prisma.session.findUnique({
       where: { id: sessionId },
       select: { purpose: true, context: true, conversationId: true },
@@ -1504,7 +1327,6 @@ export class SessionManager {
 
   private clearTerminalState(sessionId: string): void {
     this.terminalSessions.delete(sessionId);
-    this.clearLogicalCompletionCleanup(sessionId);
   }
 
   private startSessionFinalization(
@@ -1539,8 +1361,6 @@ export class SessionManager {
   }
 
   private maybeClearTerminalState(sessionId: string): void {
-    if (this.pipelines.has(sessionId)) return;
-    if (this.logicalCompletionCleanupTimers.has(sessionId)) return;
     if (this.sessionFinalizations.has(sessionId)) return;
     this.terminalSessions.delete(sessionId);
   }
@@ -1603,32 +1423,6 @@ export class SessionManager {
       await reservation;
       if (this.followUpReservations.get(sessionId) === reservation) return;
     }
-  }
-
-  private destroyActivePipeline(sessionId: string): void {
-    const pipeline = this.pipelines.get(sessionId);
-    if (pipeline) {
-      pipeline.destroy();
-      this.pipelines.delete(sessionId);
-    }
-    this.cancelTokens.delete(sessionId);
-    this.heartbeatThrottle.delete(sessionId);
-  }
-
-  private clearLogicalCompletionCleanup(sessionId: string): void {
-    const timer = this.logicalCompletionCleanupTimers.get(sessionId);
-    if (timer) clearTimeout(timer);
-    this.logicalCompletionCleanupTimers.delete(sessionId);
-  }
-
-  private scheduleLogicalCompletionCleanup(sessionId: string): void {
-    this.clearLogicalCompletionCleanup(sessionId);
-    const timer = setTimeout(() => {
-      this.logicalCompletionCleanupTimers.delete(sessionId);
-      this.destroyActivePipeline(sessionId);
-      this.maybeClearTerminalState(sessionId);
-    }, SessionManager.CODEX_TURN_COMPLETION_GRACE_MS);
-    this.logicalCompletionCleanupTimers.set(sessionId, timer);
   }
 
   private logSessionError(source: string, error: unknown, metadata: Record<string, unknown>): void {

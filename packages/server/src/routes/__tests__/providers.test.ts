@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   AgentType,
   CODEX_NATIVE_MODEL_PROVIDER_IDS,
+  RuntimeType,
   type ProviderSecretWriteState,
 } from '@agent-tower/shared';
 import { providerRoutes } from '../providers.js';
@@ -122,6 +123,146 @@ describe('provider routes', () => {
     expect(response.json()[AgentType.GEMINI_CLI]).toMatchObject({
       apiKey: { kind: 'env', path: 'GEMINI_API_KEY' },
       model: { kind: 'config', path: 'model' },
+    });
+    expect(response.json()[AgentType.QWEN_CODE]).toMatchObject({
+      apiBaseUrl: { kind: 'env', path: 'OPENAI_BASE_URL' },
+      apiKey: { kind: 'env', path: 'OPENAI_API_KEY' },
+      model: { kind: 'config', path: 'model' },
+    });
+    await app.close();
+  });
+
+  it('creates Codex ACP providers with write-only secrets and keeps their runtime immutable', async () => {
+    const app = await createApp();
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/providers',
+      payload: {
+        name: 'Codex ACP Custom',
+        agentType: AgentType.CODEX,
+        runtimeType: RuntimeType.ACP,
+        env: { OPENAI_API_KEY: { action: 'replace', value: 'acp-route-secret' } },
+        config: { permissionMode: 'ASK' },
+        simplified: {
+          apiBaseUrl: 'https://proxy.example/v1',
+          model: 'gpt-acp',
+        },
+      },
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(created.body).not.toContain('acp-route-secret');
+    expect(created.json()).toMatchObject({
+      agentType: AgentType.CODEX,
+      runtimeType: RuntimeType.ACP,
+      config: { model: 'gpt-acp', permissionMode: 'ASK' },
+      redactedEnv: { OPENAI_API_KEY: { configured: true, sensitive: true } },
+    });
+    const providerId = created.json().id as string;
+
+    const updated = await app.inject({
+      method: 'PUT',
+      url: `/api/providers/${providerId}`,
+      payload: { name: 'Codex ACP Renamed', runtimeType: RuntimeType.CLI },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({
+      name: 'Codex ACP Renamed',
+      runtimeType: RuntimeType.ACP,
+    });
+    expect(getProviderById(providerId)?.runtimeType).toBe(RuntimeType.ACP);
+    await app.close();
+  });
+
+  it.each([
+    {
+      name: 'Claude Code ACP Custom',
+      agentType: AgentType.CLAUDE_CODE,
+      secretKey: 'ANTHROPIC_API_KEY',
+      secret: 'claude-acp-route-secret',
+      apiBaseUrl: 'https://anthropic-gateway.example/v1',
+      model: 'claude-sonnet-test',
+      reasoningEffort: 'high',
+    },
+    {
+      name: 'Qwen Code ACP Custom',
+      agentType: AgentType.QWEN_CODE,
+      secretKey: 'OPENAI_API_KEY',
+      secret: 'qwen-acp-route-secret',
+      apiBaseUrl: 'https://dashscope.example/v1',
+      model: 'qwen3-coder-test',
+      reasoningEffort: undefined,
+    },
+  ])('creates $name with its Agent credentials and ACP runtime', async ({
+    name,
+    agentType,
+    secretKey,
+    secret,
+    apiBaseUrl,
+    model,
+    reasoningEffort,
+  }) => {
+    const app = await createApp();
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/providers',
+      payload: {
+        name,
+        agentType,
+        runtimeType: RuntimeType.ACP,
+        env: { [secretKey]: { action: 'replace', value: secret } },
+        config: { permissionMode: 'AUTO_APPROVE' },
+        simplified: { apiBaseUrl, model, reasoningEffort },
+      },
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(created.body).not.toContain(secret);
+    expect(created.json()).toMatchObject({
+      agentType,
+      runtimeType: RuntimeType.ACP,
+      config: { model, permissionMode: 'AUTO_APPROVE' },
+      redactedEnv: { [secretKey]: { configured: true, sensitive: true } },
+      simplified: {
+        apiBaseUrl,
+        apiKey: { configured: true, envKey: secretKey },
+        model,
+      },
+    });
+    expect(getProviderById(created.json().id)?.runtimeType).toBe(RuntimeType.ACP);
+    await app.close();
+  });
+
+  it('rejects ACP runtime for unsupported Agent identities', async () => {
+    const app = await createApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/providers',
+      payload: {
+        name: 'Gemini ACP',
+        agentType: AgentType.GEMINI_CLI,
+        runtimeType: RuntimeType.ACP,
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      diagnostics: [{ code: 'INVALID_ENUM' }],
+    });
+
+    const invalidPermission = await app.inject({
+      method: 'POST',
+      url: '/api/providers',
+      payload: {
+        name: 'Codex ACP Invalid Permission',
+        agentType: AgentType.CODEX,
+        runtimeType: RuntimeType.ACP,
+        config: { permissionMode: 'ALWAYS' },
+      },
+    });
+    expect(invalidPermission.statusCode).toBe(400);
+    expect(invalidPermission.json()).toMatchObject({
+      diagnostics: [{ field: 'executionPermission', code: 'INVALID_ENUM' }],
     });
     await app.close();
   });
@@ -565,6 +706,64 @@ describe('provider routes', () => {
         { path: '/draft-a/models', authMatched: true },
         { path: '/draft-b/models', authMatched: true },
       ]);
+      expect(getAllProviders()).toHaveLength(countBefore);
+    } finally {
+      await app.close();
+      await loopback.close();
+    }
+  });
+
+  it.each([
+    {
+      name: 'Claude ACP gateway',
+      agentType: AgentType.CLAUDE_CODE,
+      secretKey: 'ANTHROPIC_API_KEY',
+      expectedHeader: 'x-api-key',
+    },
+    {
+      name: 'Qwen ACP gateway',
+      agentType: AgentType.QWEN_CODE,
+      secretKey: 'OPENAI_API_KEY',
+      expectedHeader: 'authorization',
+    },
+  ])('probes $name with the current unsaved credential', async ({
+    name,
+    agentType,
+    secretKey,
+    expectedHeader,
+  }) => {
+    const secret = `${agentType.toLowerCase()}-probe-secret`;
+    const captured: Array<{ path: string; authenticated: boolean }> = [];
+    const loopback = await startLoopback((request, response) => {
+      captured.push({
+        path: request.url ?? '',
+        authenticated: expectedHeader === 'x-api-key'
+          ? request.headers['x-api-key'] === secret
+          : request.headers.authorization === `Bearer ${secret}`,
+      });
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"data":[]}');
+    });
+    const app = await createApp({ timeoutMs: 500 });
+    const countBefore = getAllProviders().length;
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/providers/test',
+        payload: {
+          name,
+          agentType,
+          runtimeType: RuntimeType.ACP,
+          env: { [secretKey]: { action: 'replace', value: secret } },
+          simplified: { apiBaseUrl: `${loopback.baseUrl}/gateway` },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ ok: true, stage: 'connection' });
+      expect(response.body).not.toContain(secret);
+      expect(captured).toEqual([{ path: '/gateway/models', authenticated: true }]);
       expect(getAllProviders()).toHaveLength(countBefore);
     } finally {
       await app.close();

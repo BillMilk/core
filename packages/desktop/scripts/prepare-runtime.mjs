@@ -2,6 +2,7 @@ import { rmSync, mkdirSync, cpSync, existsSync, readdirSync, chmodSync, realpath
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { patchClaudeAgentAcp } from '../../server/scripts/patch-claude-agent-acp.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(__dirname, '..');
@@ -73,6 +74,10 @@ requirePath(path.join(serverRuntimeDir, 'node_modules/prisma/build/index.js'), '
 requirePath(path.join(serverRuntimeDir, 'node_modules/@prisma/client'), 'Prisma client runtime');
 requirePath(path.join(serverRuntimeDir, 'node_modules/@shitiandmw/node-pty'), 'node-pty runtime');
 requirePath(path.join(serverRuntimeDir, 'node_modules/@modelcontextprotocol/sdk'), 'MCP SDK runtime');
+requirePath(path.join(serverRuntimeDir, 'node_modules/@agentclientprotocol/sdk'), 'ACP SDK runtime');
+requirePath(path.join(serverRuntimeDir, 'node_modules/@agentclientprotocol/codex-acp'), 'Codex ACP adapter runtime');
+requirePath(path.join(serverRuntimeDir, 'node_modules/@agentclientprotocol/claude-agent-acp'), 'Claude Code ACP adapter runtime');
+await patchClaudeAgentAcp({ moduleRoot: serverRuntimeDir });
 assertNoRuntimeSymlinks(path.join(serverRuntimeDir, 'node_modules'));
 
 const workspacePrismaClientPackage = realpathSync(path.join(monorepoRoot, 'packages/server/node_modules/@prisma/client'));
@@ -109,6 +114,10 @@ const runtimeCheck = spawnSync(process.execPath, [
     "require.resolve('@prisma/fetch-engine')",
     "require.resolve('@prisma/get-platform')",
     "await import('@modelcontextprotocol/sdk/server/mcp.js')",
+    "await import('@agentclientprotocol/sdk')",
+    "require.resolve('@agentclientprotocol/codex-acp')",
+    "require.resolve('@agentclientprotocol/claude-agent-acp/dist/index.js')",
+    "await import('./dist/runtime/acp/agents/executable-resolution.js').then((module) => { if (!module.resolveBundledClaudeExecutable()) throw new Error('Bundled Claude executable was not resolved') })",
     "await import('./dist/mcp/server.js')",
   ].join(';'),
 ], {

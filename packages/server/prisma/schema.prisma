@@ -357,6 +357,8 @@ model Session {
   conversation   Conversation?      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   context        String             @default("WORKSPACE") // WORKSPACE: 项目工作区, CONVERSATION: 独立对话
   agentType      String
+  runtimeType    String             @default("CLI")
+  externalSessionId String?
   variant        String             @default("DEFAULT")
   providerId     String?
   prompt         String

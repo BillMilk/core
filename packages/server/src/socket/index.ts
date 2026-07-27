@@ -72,7 +72,7 @@ export async function closeSocket(): Promise<void> {
   if (io) {
     socketGateway?.destroy()
     // Kill all active agent session pipelines on shutdown
-    getSessionManager().destroyAll()
+    await getSessionManager().destroyAll()
     // Kill all standalone terminals on shutdown
     try {
       const tm = await getTerminalManager()

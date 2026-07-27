@@ -52,6 +52,7 @@ import { TeamReconcilerService } from './team-reconciler.service.js';
 import { ensureTaskNotDeleted } from './deleted-task-guard.js';
 import { buildTextPreview, TASK_TITLE_MAX_LENGTH } from './task.service.js';
 import { ensureProjectSupportsWorktrees } from './project-guards.js';
+import { isRuntimeAwaitingPermission } from '../runtime/runtime-state-view.js';
 
 export interface CreateMemberPresetInput {
   name: string;
@@ -1894,7 +1895,11 @@ export class TeamRunService {
     if (!isActiveMembershipStatus(membershipStatus)) return 'REMOVED';
 
     const memberInvocations = invocations.filter((invocation) => invocation.memberId === memberId);
-    if (memberInvocations.some((invocation) => invocation.status === 'RUNNING')) return 'RUNNING';
+    const runningInvocations = memberInvocations.filter((invocation) => invocation.status === 'RUNNING');
+    if (runningInvocations.some(
+      (invocation) => invocation.sessionId && isRuntimeAwaitingPermission(invocation.sessionId),
+    )) return 'PENDING_APPROVAL';
+    if (runningInvocations.length > 0) return 'RUNNING';
     if (memberInvocations.some((invocation) => invocation.status === 'WAITING_ROOM_REPLY')) return 'WAITING_ROOM_REPLY';
     if (memberInvocations.some((invocation) => invocation.status === 'SESSION_ENDED')) return 'SESSION_ENDED';
     if (memberInvocations.some((invocation) => invocation.status === 'QUEUED')) return 'QUEUED';

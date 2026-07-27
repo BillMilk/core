@@ -1,0 +1,2 @@
+ALTER TABLE "Session" ADD COLUMN "runtimeType" TEXT NOT NULL DEFAULT 'CLI';
+ALTER TABLE "Session" ADD COLUMN "externalSessionId" TEXT;

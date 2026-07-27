@@ -2,6 +2,8 @@
  * Unified Socket.IO event types.
  */
 
+import type { RuntimePermissionRequest, RuntimeStateDto } from '../types.js';
+
 export const NAMESPACE = '/events' as const;
 
 export const ClientEvents = {
@@ -23,6 +25,9 @@ export const ServerEvents = {
   SESSION_COMPLETED: 'session:completed',
   SESSION_ID: 'session:sessionId',
   SESSION_ERROR: 'session:error',
+  SESSION_PERMISSION_REQUESTED: 'session:permission_requested',
+  SESSION_PERMISSION_INVALIDATED: 'session:permission_invalidated',
+  SESSION_RUNTIME_STATE_CHANGED: 'session:runtime_state_changed',
   TASK_UPDATED: 'task:updated',
   TASK_DELETED: 'task:deleted',
   AGENT_STATUS_CHANGED: 'agent:status_changed',
@@ -89,6 +94,22 @@ export interface SessionIdPayload {
 export interface SessionErrorPayload {
   sessionId: string;
   message: string;
+}
+
+export interface SessionPermissionRequestedPayload {
+  sessionId: string;
+  permission: RuntimePermissionRequest;
+}
+
+export interface SessionPermissionInvalidatedPayload {
+  sessionId: string;
+  turnId: string;
+  requestId: string;
+}
+
+export interface SessionRuntimeStateChangedPayload {
+  sessionId: string;
+  state: RuntimeStateDto;
 }
 
 export interface SessionSubscribedPayload {

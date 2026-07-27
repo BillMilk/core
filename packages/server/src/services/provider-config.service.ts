@@ -1,7 +1,9 @@
 import { parse as parseToml } from 'smol-toml';
 import {
   AgentType,
+  RuntimeType,
   getProviderCapability,
+  supportsAgentRuntime,
   type Provider,
   type ProviderBackupFile,
   type ProviderConfigDiagnostic,
@@ -626,7 +628,10 @@ function applyCodexApiBaseUrl<T extends Pick<Provider, 'agentType' | 'env' | 'co
 
   const env = { ...provider.env };
   delete env.OPENAI_BASE_URL;
-  if (connection.providerKind === 'built-in') {
+  if (
+    connection.providerKind === 'built-in'
+    || connection.source === 'codex-openai-compatible'
+  ) {
     return {
       provider: {
         ...provider,
@@ -684,10 +689,11 @@ export function mapAdvancedToSimple(provider: Pick<Provider, 'agentType' | 'env'
   if (provider.agentType === AgentType.CODEX) {
     const connection = resolveEffectiveProviderConnection(provider);
     if (connection.baseUrl && connection.source !== 'default') simple.apiBaseUrl = connection.baseUrl;
-    if (connection.envKey) {
+    const credentialEnvKey = connection.credentialEnvKey ?? connection.envKey;
+    if (credentialEnvKey) {
       simple.apiKey = {
         configured: !!connection.secret,
-        envKey: connection.envKey,
+        envKey: credentialEnvKey,
       };
     }
   } else if (capability.apiBaseUrl) {
@@ -882,6 +888,7 @@ export function normalizeProviderDraft(
     id: '',
     name: '',
     agentType: input.agentType,
+    runtimeType: input.runtimeType ?? RuntimeType.CLI,
     env: {},
     config: {},
     isDefault: false,
@@ -894,14 +901,36 @@ export function normalizeProviderDraft(
     ...base,
     name: input.name.trim(),
     agentType: input.agentType,
+    runtimeType: existing?.runtimeType ?? input.runtimeType ?? RuntimeType.CLI,
     env: applySecretWrites(base.env, input.env),
     config: incomingConfig,
     settings: restoredSettings,
     isDefault: input.isDefault ?? base.isDefault,
   };
   const diagnostics: ProviderConfigDiagnostic[] = [];
+  const runtimeType = provider.runtimeType ?? RuntimeType.CLI;
 
   if (!provider.name) diagnostics.push({ field: 'name', code: 'REQUIRED', message: 'Provider name is required' });
+  if (!supportsAgentRuntime(provider.agentType, runtimeType)) {
+    diagnostics.push({
+      field: 'config',
+      code: 'INVALID_ENUM',
+      message: `Agent '${provider.agentType}' does not support the '${runtimeType}' runtime`,
+    });
+  }
+  const acpPermissionMode = provider.config.permissionMode ?? provider.config.acpPermissionMode;
+  if (
+    runtimeType === RuntimeType.ACP
+    && acpPermissionMode !== undefined
+    && acpPermissionMode !== 'ASK'
+    && acpPermissionMode !== 'AUTO_APPROVE'
+  ) {
+    diagnostics.push({
+      field: 'executionPermission',
+      code: 'INVALID_ENUM',
+      message: 'ACP permissionMode must be ASK or AUTO_APPROVE',
+    });
+  }
   for (const [key, write] of Object.entries(input.env ?? {})) {
     if (write.action === 'replace' && !write.value.trim()) {
       diagnostics.push({ field: 'env', code: 'REQUIRED', message: `Environment value is required for ${key}` });
@@ -1003,6 +1032,7 @@ export function validateProviderBackupDrafts(
     const { diagnostics } = normalizeProviderDraft({
       name: incoming.name,
       agentType: incoming.agentType,
+      runtimeType: incoming.runtimeType,
       env: Object.fromEntries(Object.entries(incoming.env ?? {}).map(([key, value]) => [
         key,
         { action: 'replace' as const, value },
@@ -1027,7 +1057,12 @@ export function redactProvider(provider: Provider, deletable?: boolean): Redacte
     env: {},
     redactedEnv: Object.fromEntries(Object.entries(provider.env).map(([key, value]) => [
       key,
-      { configured: !!value, sensitive: key === connection.envKey || isSensitiveProviderKey(key) },
+      {
+        configured: !!value,
+        sensitive: key === connection.envKey
+          || key === connection.credentialEnvKey
+          || isSensitiveProviderKey(key),
+      },
     ])),
     config: redactObject(provider.config) as Record<string, unknown>,
     settings: redactSettings(provider.settings),

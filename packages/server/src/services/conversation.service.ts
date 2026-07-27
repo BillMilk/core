@@ -11,6 +11,8 @@ import { CommandBuildError } from '../executors/command-builder.js';
 import { resolveDataDir } from '../utils/data-dir.js';
 import type { SessionManager } from './session-manager.js';
 import { appendAttachmentMarkdownContext } from './attachment-context.js';
+import { RuntimeType } from '@agent-tower/shared';
+import { getProviderRuntimeType } from '../executors/providers.js';
 
 const CONVERSATIONS_DIR = 'conversations';
 const TITLE_MAX_LENGTH = 80;
@@ -87,6 +89,7 @@ function toConversationDto(conversation: ConversationWithSession): Conversation 
     workingDir: conversation.workingDir,
     sessionId: session.id,
     agentType: session.agentType as AgentType,
+    runtimeType: session.runtimeType as RuntimeType,
     status: session.status as SessionStatus,
     providerId: session.providerId ?? null,
     variant: session.variant ?? null,
@@ -183,6 +186,7 @@ export class ConversationService {
             create: {
               context: SessionContext.CONVERSATION,
               agentType: provider.agentType as AgentType,
+              runtimeType: getProviderRuntimeType(provider),
               variant: input.variant ?? 'DEFAULT',
               providerId: provider.id,
               prompt,

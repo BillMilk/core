@@ -1,7 +1,21 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import type { Session, AgentType } from '@agent-tower/shared'
+import {
+  SessionStatus,
+  type AgentType,
+  type RuntimeStateDto,
+  type RuntimeTurnState,
+  type Session,
+} from '@agent-tower/shared'
+import {
+  ServerEvents,
+  type SessionPermissionInvalidatedPayload,
+  type SessionPermissionRequestedPayload,
+  type SessionRuntimeStateChangedPayload,
+} from '@agent-tower/shared/socket'
 import { apiClient } from '../lib/api-client'
 import { queryKeys } from './query-keys'
+import { socketManager } from '@/lib/socket/manager'
+import { useEffect } from 'react'
 
 // ============ Queries ============
 
@@ -11,6 +25,76 @@ export function useSession(id: string) {
     queryKey: queryKeys.sessions.detail(id),
     queryFn: () => apiClient.get<Session>(`/sessions/${id}`),
     enabled: !!id,
+  })
+}
+
+export function useRuntimeState(id: string) {
+  const queryClient = useQueryClient()
+  const query = useQuery({
+    queryKey: queryKeys.sessions.runtime(id),
+    queryFn: () => apiClient.get<RuntimeStateDto>(`/sessions/${id}/runtime`),
+    enabled: !!id,
+  })
+
+  useEffect(() => {
+    if (!id) return
+    const socket = socketManager.connect()
+    const refresh = (payload: SessionPermissionRequestedPayload | SessionPermissionInvalidatedPayload) => {
+      if (payload.sessionId !== id) return
+      queryClient.invalidateQueries({ queryKey: queryKeys.sessions.runtime(id) })
+    }
+    const onState = (payload: SessionRuntimeStateChangedPayload) => {
+      if (payload.sessionId !== id) return
+      queryClient.setQueryData(queryKeys.sessions.runtime(id), payload.state)
+    }
+    const onConnect = () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.sessions.runtime(id) })
+    }
+    socket.on(ServerEvents.SESSION_PERMISSION_REQUESTED, refresh)
+    socket.on(ServerEvents.SESSION_PERMISSION_INVALIDATED, refresh)
+    socket.on(ServerEvents.SESSION_RUNTIME_STATE_CHANGED, onState)
+    socket.on('connect', onConnect)
+    return () => {
+      socket.off(ServerEvents.SESSION_PERMISSION_REQUESTED, refresh)
+      socket.off(ServerEvents.SESSION_PERMISSION_INVALIDATED, refresh)
+      socket.off(ServerEvents.SESSION_RUNTIME_STATE_CHANGED, onState)
+      socket.off('connect', onConnect)
+    }
+  }, [id, queryClient])
+
+  return query
+}
+
+export function isRuntimeTurnActive(turnState?: RuntimeTurnState): boolean {
+  return turnState === 'RUNNING'
+    || turnState === 'AWAITING_PERMISSION'
+    || turnState === 'CANCELLING'
+}
+
+export function isSessionStatusActive(status?: SessionStatus | string): boolean {
+  return status === SessionStatus.RUNNING || status === SessionStatus.PENDING
+}
+
+export function useSessionActivity(id: string, status?: SessionStatus | string) {
+  const { data: runtimeState } = useRuntimeState(id)
+  return {
+    runtimeState,
+    isActive: isSessionStatusActive(status) || isRuntimeTurnActive(runtimeState?.turnState),
+    isCancelling: runtimeState?.turnState === 'CANCELLING',
+  }
+}
+
+export function useResolveRuntimePermission() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ sessionId, requestId, optionId }: {
+      sessionId: string
+      requestId: string
+      optionId: string
+    }) => apiClient.post<void>(`/sessions/${sessionId}/permissions/${requestId}/resolve`, { optionId }),
+    onSettled: (_data, _error, variables) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.sessions.runtime(variables.sessionId) })
+    },
   })
 }
 

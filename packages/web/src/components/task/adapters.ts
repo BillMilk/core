@@ -71,6 +71,8 @@ export function formatAgentType(agentType: AgentType): string {
       return 'Cursor Agent'
     case AgentType.CODEX:
       return 'Codex'
+    case AgentType.QWEN_CODE:
+      return 'Qwen Code'
   }
 }
 

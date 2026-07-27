@@ -7,7 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import type { PrismaClient } from '@prisma/client';
 import { AgentType, SessionStatus } from '../../types/index.js';
 import { EventBus } from '../../core/event-bus.js';
-import type { BaseExecutor, ExecutorSpawnConfig, SpawnedChild } from '../../executors/index.js';
+import type { BaseExecutor, ExecutorSpawnConfig } from '../../executors/index.js';
 import { TeamLockService } from '../team-lock.service.js';
 import {
   AGENT_SUBPROCESS_BLOCKED_ENV_KEYS,
@@ -137,7 +137,9 @@ function createPty() {
   return {
     pid: 12345,
     onData: vi.fn(() => ({ dispose: vi.fn() })),
-    onExit: vi.fn(() => ({ dispose: vi.fn() })),
+    onExit: vi.fn((_listener: (event: { exitCode: number; signal?: number }) => void) => ({
+      dispose: vi.fn(),
+    })),
     write: vi.fn(),
     resize: vi.fn(),
     kill: vi.fn(),
@@ -676,7 +678,7 @@ describe('SessionManager TeamRun env injection', () => {
     );
   });
 
-  it('compensates a partially attached pipeline before rejecting session start', async () => {
+  it('tracks an attached runtime process through its real PTY exit', async () => {
     const { workspace } = await createWorkspace();
     const session = await prisma.session.create({
       data: {
@@ -689,27 +691,20 @@ describe('SessionManager TeamRun env injection', () => {
     });
     const pty = createPty();
     spawnMock.mockResolvedValueOnce({ pid: 52345, pty });
-    const managerInternals = manager as unknown as {
-      attachPipeline: (
-        sessionId: string,
-        agentType: AgentType,
-        workingDir: string,
-        spawnResult: SpawnedChild,
-      ) => void;
-    };
-    const attachPipeline = managerInternals.attachPipeline.bind(manager);
-    vi.spyOn(managerInternals, 'attachPipeline').mockImplementationOnce((...args) => {
-      attachPipeline(...args);
-      throw new Error('attach pipeline post-step failed');
+    await manager.start(session.id);
+
+    await expect(prisma.executionProcess.findFirst({ where: { sessionId: session.id } })).resolves.toMatchObject({
+      pid: 52345,
+      exitCode: null,
     });
 
-    await expect(manager.start(session.id)).rejects.toThrow('attach pipeline post-step failed');
+    for (const [listener] of pty.onExit.mock.calls) listener({ exitCode: 0 });
 
-    expect(pty.kill).toHaveBeenCalled();
-    expect(manager.hasActivePipeline(session.id)).toBe(false);
-    await expect(prisma.executionProcess.count({ where: { sessionId: session.id } })).resolves.toBe(0);
-    await expect(prisma.session.findUnique({ where: { id: session.id } })).resolves.toMatchObject({
-      status: SessionStatus.CANCELLED,
+    await vi.waitFor(async () => {
+      await expect(prisma.executionProcess.findFirst({ where: { sessionId: session.id } })).resolves.toMatchObject({
+        pid: 52345,
+        exitCode: 0,
+      });
     });
   });
 

@@ -36,6 +36,7 @@ describe('provider capability matrix', () => {
     expect(PROVIDER_CAPABILITIES[AgentType.CLAUDE_CODE].disableResponsesWebsocket).toBeUndefined()
     expect(PROVIDER_CAPABILITIES[AgentType.GEMINI_CLI].disableResponsesWebsocket).toBeUndefined()
     expect(PROVIDER_CAPABILITIES[AgentType.CURSOR_AGENT].disableResponsesWebsocket).toBeUndefined()
+    expect(PROVIDER_CAPABILITIES[AgentType.QWEN_CODE].disableResponsesWebsocket).toBeUndefined()
   })
 
   it('declares ordered five-level effort options', () => {
@@ -79,5 +80,14 @@ describe('provider capability matrix', () => {
     expect(getProviderCapability(AgentType.CURSOR_AGENT)?.apiBaseUrl).toBeUndefined()
     expect(getProviderCapability(AgentType.CURSOR_AGENT)?.apiKey).toBeUndefined()
     expect(getProviderCapability(AgentType.CURSOR_AGENT)?.reasoningEffort).toBeUndefined()
+  })
+
+  it('exposes Qwen OpenAI-compatible connection fields for ACP', () => {
+    expect(getProviderCapability(AgentType.QWEN_CODE)).toMatchObject({
+      agentType: AgentType.QWEN_CODE,
+      apiBaseUrl: { kind: 'env', path: 'OPENAI_BASE_URL' },
+      apiKey: { kind: 'env', path: 'OPENAI_API_KEY' },
+      model: { kind: 'config', path: 'model' },
+    })
   })
 })

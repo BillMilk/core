@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   AgentType as SharedAgentType,
   PROVIDER_CAPABILITIES,
+  RuntimeType,
   type ProviderDraftInput,
 } from '@agent-tower/shared';
 import {
@@ -59,6 +60,7 @@ const conflictResolutionsSchema = z.record(
 const createProviderSchema = z.object({
   name: z.string(),
   agentType: z.nativeEnum(AgentType),
+  runtimeType: z.nativeEnum(RuntimeType).default(RuntimeType.CLI),
   env: z.record(secretWriteSchema).default({}),
   config: z.record(z.unknown()).default({}),
   settings: z.string().optional(),
@@ -85,6 +87,7 @@ const backupProviderSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   agentType: z.nativeEnum(AgentType),
+  runtimeType: z.nativeEnum(RuntimeType).optional().default(RuntimeType.CLI),
   env: z.record(z.string()).default({}),
   config: z.record(z.unknown()).default({}),
   settings: z.string().optional(),

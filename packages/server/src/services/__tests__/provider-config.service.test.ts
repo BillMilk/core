@@ -74,13 +74,13 @@ describe('provider config mapper', () => {
     const connection = resolveEffectiveProviderConnection({
       agentType: AgentType.CODEX,
       env: { OPENAI_API_KEY: 'built-in-sentinel', OPENAI_BASE_URL: 'https://legacy.example/v1' },
-      settings: 'openai_base_url = "https://canonical.example/v1"\nunknown = true\n',
+      settings: 'openai_base_url = "https://api.openai.com/v1"\nunknown = true\n',
     });
 
     expect(connection).toMatchObject({
       providerKind: 'built-in',
       modelProviderId: 'openai',
-      baseUrl: 'https://canonical.example/v1',
+      baseUrl: 'https://api.openai.com/v1',
       envKey: 'OPENAI_API_KEY',
       source: 'codex-openai',
       legacyBaseUrl: false,

@@ -2,14 +2,16 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ProviderBackupFile } from '@agent-tower/shared';
+import { RuntimeType, type ProviderBackupFile } from '@agent-tower/shared';
 import { AgentType } from '../../types/index.js';
 import {
   canDeleteProvider,
+  createProvider,
   createProviderBackup,
   deleteProvider,
   getAllProviders,
   getDefaultProviders,
+  getDefaultProvider,
   importProvidersFromBackup,
   previewProviderImport,
   reloadProviders,
@@ -219,5 +221,33 @@ describe('providers backup/import', () => {
     expect(canDeleteProvider(builtInProvider!)).toBe(false);
 
     expect(() => deleteProvider('claude-code-default')).toThrow(/Cannot delete built-in provider/);
+  });
+
+  it('keeps CLI and ACP defaults isolated for the same agent identity', () => {
+    expect(getDefaultProvider(AgentType.CODEX, RuntimeType.CLI)?.id).toBe('codex-default');
+    expect(getDefaultProvider(AgentType.CODEX, RuntimeType.ACP)?.id).toBe('codex-acp-default');
+    expect(getDefaultProvider(AgentType.CLAUDE_CODE, RuntimeType.CLI)?.id).toBe('claude-code-default');
+    expect(getDefaultProvider(AgentType.CLAUDE_CODE, RuntimeType.ACP)?.id).toBe('claude-code-acp-default');
+    expect(getDefaultProvider(AgentType.QWEN_CODE, RuntimeType.ACP)?.id).toBe('qwen-code-acp-default');
+  });
+
+  it('rejects unsupported Agent/Runtime combinations', () => {
+    expect(() => createProvider({
+      name: 'Gemini ACP',
+      agentType: AgentType.GEMINI_CLI,
+      runtimeType: RuntimeType.ACP,
+      env: {},
+      config: {},
+      isDefault: false,
+    })).toThrow(/does not support the 'ACP' runtime/);
+
+    expect(() => createProvider({
+      name: 'Qwen CLI',
+      agentType: AgentType.QWEN_CODE,
+      runtimeType: RuntimeType.CLI,
+      env: {},
+      config: {},
+      isDefault: false,
+    })).toThrow(/does not support the 'CLI' runtime/);
   });
 });

@@ -3,13 +3,25 @@
 ## 职责
 
 ```text
-SessionManager -> Executor -> SpawnedChild -> AgentPipeline -> Parser/MsgStore -> EventBus
+SessionManager -> RuntimeCoordinator -> CLI Driver -> Executor / PTY / AgentPipeline / Parser
+                                     -> ACP Driver -> ACP Agent Registry -> Agent Definition
+                                                   -> ACP SDK / adapter or native ACP CLI / Projector
+                                     -> MsgStore / EventBus
 ```
 
-- `SessionManager` 选择 provider/executor，组装环境，维护 session/process DB 状态、pipeline map、持久化和结束后补偿。
-- `BaseExecutor` 构造 CLI 命令并拥有 PTY spawn/cancel 与启动期事件交接。
-- `AgentPipeline` 处理单个 PTY 的 data/exit、parser 和 MsgStore listener 生命周期。
-- Parser 将 agent stream 转为 `NormalizedEntry` JSON Patch；MsgStore 保存 raw/patch/session id 并生成 snapshot。
+- `SessionManager` 拥有 Session/Task/TeamRun 业务状态、环境组装、snapshot、auto-commit 和结束后处理，不持有 PTY/Pipeline。
+- `RuntimeCoordinator` 按 Tower session 隔离 DriverSession，维护单 active turn、turnId/sequence、权限状态、迟到事件过滤和可等待销毁。
+- CLI Driver 选择 Executor，并拥有 PTY、AgentPipeline、Parser、early event 和真实 child 退出跟踪。
+- 通用 ACP Driver 拥有 adapter/native ACP process、initialize、session new/load、prompt/cancel、权限响应和协议清理；ACP stdout 不进入普通日志。
+- ACP Agent Registry 按 `AgentType` 选择 Definition；Definition 负责 Provider 投影、可执行文件/adapter 解析、可用性、Session metadata 与 Agent 专属 model/effort/mode 配置。新增 ACP Agent 不复制 Driver。
+- Runtime/Agent 专属的 Provider 协议元数据与兼容 Header 放在 Definition 投影层，并合并用户自定义配置；通用 ACP Driver 不感知具体网关认证或来源标识。
+- Parser/ACP Projector 将输出转为 `NormalizedEntry` JSON Patch；MsgStore 生成统一 snapshot。
+- ACP `tool_call_update` 是按 `toolCallId` 发送的局部更新；Projector 必须累计并合并工具状态，省略字段沿用旧值、显式 `null` 清除字段。保留 title/kind/status/content/locations/input/output 的结构化语义，不能用单次 update 重建并覆盖完整工具条目；ACP `pending` 也不等同于独立的 permission request。
+- ACP adapter 可能用伪 `tool_call` 转发运行时诊断（例如 `mcp_startup.*`）；这类事件不计入用户工具调用，非阻塞失败应投影为警告日志并保留诊断内容，真正导致 turn/session 失败的错误仍使用错误日志。
+
+DriverSession 可以跨 turn 保留协议连接和 external session id，但 MsgStore 是 turn-bound 资源，必须由 `runTurn` 注入。idle DriverSession 不得捕获 MsgStore，否则 SessionManager 释放 snapshot store 后，延迟 follow-up 会把输出写入失效对象并造成大对象常驻。
+
+`Session.status = RUNNING` 跟随逻辑 Runtime turn 启动，每次初始 prompt 和 follow-up 都必须在 `startTurn` 边界持久化；不能依赖 OS process `started`，因为 ACP 会跨 turn 复用同一进程。process 事件只维护 `ExecutionProcess`，停止操作也必须优先检查 active turn，再使用持久化终态作兜底。
 
 Route 不直接 spawn PTY，Parser 不更新 Prisma 或 Task 状态。
 
@@ -17,9 +29,11 @@ Route 不直接 spawn PTY，Parser 不更新 Prisma 或 Task 状态。
 
 spawn 与 Pipeline attach 之间存在竞态。保留 `collectEarlyPtyEvents()` / `takeEarlyEvents()` 一次性交接，否则短命进程可能丢失 exit 并永久停在 RUNNING。
 
-Session 结束后的 DB 状态、snapshot、auto-commit、commit message、Task review 和 TeamRun reconciliation 由 SessionManager/Team services 负责。修改结束路径时覆盖正常完成、非零退出、stop、启动失败、并发删除和 server shutdown。
+Session 结束后的 DB 状态、snapshot、auto-commit、commit message、Task review 和 TeamRun reconciliation 由 SessionManager/Team services 负责。OS child 使用独立 `runtimeInstanceId` 记入 `ExecutionProcess`，真实退出才写 exitCode，不能把 turn completion 当作 process exit。修改结束路径时覆盖正常完成、非零退出、stop、启动失败、并发删除和 server shutdown。
 
-`session:patch` 只标记 snapshot dirty；运行中按低频 checkpoint 持久化，所有 session 的 snapshot DB 写入经单一串行 writer 排队，相同 snapshot 跳过。COMPLETED/FAILED/CANCELLED、pipeline 替换等边界必须 `await` 强制 flush；不能恢复为每 patch 写库或不断重置的短 debounce。
+`AgentType` 表示 Agent 身份，`RuntimeType` 表示 CLI/ACP 执行协议。Provider 选择两者，Session 创建时固化 Runtime；创建时必须通过 shared Runtime 支持矩阵校验，纯 ACP Agent 不得无 Provider 回退到 CLI。同一 Session follow-up 不允许跨 Runtime 切换。TeamRun 存活判断使用 `hasActiveTurn()`，`AWAITING_PERMISSION` 是活跃且由用户控制的等待，不触发 heartbeat nudge。
+
+`session:patch` 只标记 snapshot dirty；运行中按低频 checkpoint 持久化，所有 session 的 snapshot DB 写入经单一串行 writer 排队，相同 snapshot 跳过。external session id 持久化也复用该 writer，避免与 snapshot update 倒序提交。COMPLETED/FAILED/CANCELLED、pipeline 替换等边界必须 `await` 强制 flush；不能恢复为每 patch 写库或不断重置的短 debounce。
 
 Codex `exec --json` 的成功 `turn.completed` 是逻辑完成边界，不必继续等待包装进程退出。Pipeline 必须先保留 raw stdout、处理完该 frame 的最终消息/usage 并标记 MsgStore finished，再通知 SessionManager 持久化 `COMPLETED`；残留 PTY 只在后台短暂宽限后清理。`turn.failed` 同样是一次性的失败逻辑边界，必须优先于随后 0/undefined PTY exit，持久化 `FAILED` 且不得触发成功 auto-commit/Task review。逻辑完成后的 auto-commit 绑定 generation，并在 follow-up 开始前完成或放弃，不能与新轮 Git 操作重叠。`turn.failed`、用户 stop、非零提前退出仍走各自失败/取消路径，logical completion、PTY exit 与 destroy 竞争时只允许一次终态和一次 parser finish。
 
@@ -60,10 +74,10 @@ MsgStore patch `seq` 单调递增，并在内存上限下把淘汰消息折叠�
 检查这些接触点：
 
 1. shared `AgentType` 与公开类型。
-2. executor、command config、factory/export 和 default provider。
-3. `SessionManager.createParser()` 与 parser tests；无可靠协议时先返回 `null`。
+2. shared Runtime 支持矩阵、Provider capability/default provider，以及 Provider UI 的 Agent + Runtime 组合。
+3. CLI Agent 检查 executor、command config、factory/export 和 parser；ACP Agent 检查 Registry Definition、启动/可用性、Provider 投影、Session 配置和 Projector 特例。
 4. 前端 agent meta、provider/model selector、logo 和 capability 展示。
-5. slash command、skill/MCP config、CLI environment manifest。
+5. slash command、skill/MCP config；只有纳入本机安装能力时才加入 CLI environment manifest，不能因支持 ACP 就假装支持安装。
 6. shared/server/web 构建与公开 provider 文档。
 
 测试覆盖 early data/exit、parser throw、重复 exit/destroy、spawn failure、cancel/follow-up 和 snapshot restore。

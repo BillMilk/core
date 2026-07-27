@@ -4,6 +4,7 @@ import { AccessAuthService } from '../../services/access-auth.service.js';
 import { ClientEvents, ServerEvents } from '../events.js';
 import { SocketGateway } from '../socket-gateway.js';
 import type { AuthenticatedSocket } from '../middleware/index.js';
+import { RuntimeType } from '@agent-tower/shared';
 
 class FakeAdapter {
   rooms = new Map<string, Set<string>>();
@@ -149,6 +150,51 @@ describe('SocketGateway access auth session revocation', () => {
       event: ServerEvents.SESSION_STDOUT,
       payload: { sessionId: 'session-1', data: 'current output' },
     });
+
+    gateway.destroy();
+  });
+
+  it('broadcasts permission and authoritative runtime state transitions', () => {
+    const { namespace, eventBus, gateway } = buildGateway();
+    const socket = makeSocket(namespace, 'socket-runtime');
+    gateway.register(socket);
+    const permission = {
+      requestId: 'permission-1',
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' as const }],
+      createdAt: '2026-07-23T00:00:00.000Z',
+    };
+    const state = {
+      sessionId: 'session-1',
+      runtimeType: RuntimeType.ACP,
+      turnState: 'AWAITING_PERMISSION' as const,
+      turnId: 'turn-1',
+      capabilities: {
+        loadSession: true,
+        terminalInput: false,
+        terminalResize: false,
+        permissions: true,
+      },
+      pendingPermissions: [permission],
+    };
+
+    eventBus.emit('session:permission_requested', { sessionId: 'session-1', permission });
+    eventBus.emit('session:runtime_state_changed', { sessionId: 'session-1', state });
+    eventBus.emit('session:permission_invalidated', {
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      requestId: 'permission-1',
+    });
+
+    expect(socket.emitted).toEqual(expect.arrayContaining([
+      { event: ServerEvents.SESSION_PERMISSION_REQUESTED, payload: { sessionId: 'session-1', permission } },
+      { event: ServerEvents.SESSION_RUNTIME_STATE_CHANGED, payload: { sessionId: 'session-1', state } },
+      {
+        event: ServerEvents.SESSION_PERMISSION_INVALIDATED,
+        payload: { sessionId: 'session-1', turnId: 'turn-1', requestId: 'permission-1' },
+      },
+    ]));
 
     gateway.destroy();
   });
