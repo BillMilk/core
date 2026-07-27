@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useI18n } from '@/lib/i18n'
-import { BrandLogo } from '@/components/BrandLogo'
+import { BrandLockup } from '@/components/BrandLogo'
 
 export function HomePage() {
   const { t } = useI18n()
@@ -9,8 +9,7 @@ export function HomePage() {
   return (
     <div className="container mx-auto p-8">
       <div className="mb-8 flex items-center gap-4">
-        <BrandLogo className="h-12 w-12" />
-        <h1 className="text-4xl font-bold">Agent Tower</h1>
+        <BrandLockup className="h-12 w-auto" />
       </div>
       <p className="text-muted-foreground mb-8">{t('AI Agent Task Management Dashboard')}</p>
 

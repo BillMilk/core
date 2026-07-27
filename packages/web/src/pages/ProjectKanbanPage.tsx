@@ -22,7 +22,7 @@ import { useI18n } from '@/lib/i18n'
 import type { TeamRunMode } from '@agent-tower/shared'
 import { useCreateTaskTeamRun } from '@/hooks/use-team-run'
 import { CreateProjectModal } from '@/components/project/CreateProjectModal'
-import { BrandLogo, BrandLogoTitle } from '@/components/BrandLogo'
+import { BrandLockup } from '@/components/BrandLogo'
 import { CreateTaskInput } from '@/components/task/CreateTaskInput'
 import { cn } from '@/lib/utils'
 import { useDesktopTitlebar } from '@/lib/desktop-titlebar'
@@ -686,8 +686,7 @@ export function ProjectKanbanPage() {
           {/* 顶部栏 */}
           <header className="h-12 bg-sidebar flex items-center px-4 justify-between shrink-0 z-20">
             <div className="flex items-center gap-2 min-w-0">
-              <BrandLogo />
-              <BrandLogoTitle />
+              <BrandLockup />
               <ProjectSwitcher
                 projects={uiProjects}
                 filterProjectId={effectiveFilterProjectId}
@@ -743,8 +742,7 @@ export function ProjectKanbanPage() {
           'flex items-center gap-2 min-w-0',
           hasMacTrafficLights && 'pl-[72px]',
         )}>
-          <BrandLogo />
-          <BrandLogoTitle />
+          <BrandLockup />
           <ProjectSwitcher
             projects={uiProjects}
             filterProjectId={effectiveFilterProjectId}

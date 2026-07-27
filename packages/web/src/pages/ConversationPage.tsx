@@ -6,7 +6,7 @@ import type { Conversation } from '@agent-tower/shared'
 import { ServerEvents, type SessionCompletedPayload } from '@agent-tower/shared/socket'
 import { AgentSessionPanel } from '@/components/agent'
 import type { AgentSessionSendInput } from '@/components/agent'
-import { BrandLogo, BrandLogoTitle } from '@/components/BrandLogo'
+import { BrandLockup } from '@/components/BrandLogo'
 import { CreateTaskInput } from '@/components/task/CreateTaskInput'
 import { useProviders } from '@/hooks/use-providers'
 import {
@@ -578,8 +578,7 @@ export function ConversationPage() {
           'flex min-w-0 items-center gap-2',
           hasMacTrafficLights && 'pl-[72px]',
         )}>
-          <BrandLogo />
-          <BrandLogoTitle />
+          <BrandLockup />
           <span className="mx-1.5 select-none text-muted-foreground/40">/</span>
           <span className="truncate text-sm font-medium text-foreground/90">{t('Conversation')}</span>
         </div>

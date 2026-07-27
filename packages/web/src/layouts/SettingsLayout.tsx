@@ -1,7 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { ArrowLeft, Cpu, Bell, FolderGit2, Languages, Users, Cable, Bot } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
-import { BrandLogo } from '@/components/BrandLogo'
+import { BrandLockup } from '@/components/BrandLogo'
 import { useDesktopNavigate, useDesktopTitlebar } from '@/lib/desktop-titlebar'
 
 const NAV_ITEMS = [
@@ -24,8 +24,7 @@ export function SettingsLayout() {
       {/* Top bar — matches homepage h-12 style */}
       <header className="h-12 flex items-center justify-between px-4 border-b border-border/60 bg-background shrink-0 z-30">
         <div className="flex items-center gap-2.5">
-          <BrandLogo />
-          <span className="text-sm font-bold tracking-tight text-foreground">Agent Tower</span>
+          <BrandLockup />
           <span className="text-border text-sm" aria-hidden="true">/</span>
           <span className="text-sm text-muted-foreground">{t('设置')}</span>
         </div>

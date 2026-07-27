@@ -1,27 +1,31 @@
 import logoUrl from '@/assets/agent-tower-logo.png'
+import lockupUrl from '@/assets/agent-tower-lockup.png'
 
 interface BrandLogoProps {
   className?: string
+  alt?: string
 }
 
-interface BrandLogoTitleProps {
+interface BrandLockupProps {
   className?: string
 }
 
-export function BrandLogo({ className = 'h-6 w-6' }: BrandLogoProps) {
+export function BrandLogo({ className = 'size-6', alt = 'Agent Tower' }: BrandLogoProps) {
   return (
     <img
       src={logoUrl}
-      alt="Agent Tower"
+      alt={alt}
       className={`block shrink-0 object-contain ${className}`}
     />
   )
 }
 
-export function BrandLogoTitle({ className = '' }: BrandLogoTitleProps) {
+export function BrandLockup({ className = 'h-6 w-auto max-[359px]:h-[22px]' }: BrandLockupProps) {
   return (
-    <span className={`font-semibold text-foreground tracking-tight text-base ${className}`}>
-      Agent Tower
-    </span>
+    <img
+      src={lockupUrl}
+      alt="Agent Tower"
+      className={`block shrink-0 select-none object-contain ${className}`}
+    />
   )
 }
