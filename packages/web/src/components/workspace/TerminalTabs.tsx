@@ -1,8 +1,14 @@
 import React, { useState, useCallback, useRef } from "react"
-import { Terminal, Plus, X } from "lucide-react"
+import { ClipboardPaste, Loader2, Plus, Terminal, X } from "lucide-react"
+import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { useI18n } from "@/lib/i18n"
-import { StandaloneTerminalView } from "./StandaloneTerminalView"
+import { Modal } from "@/components/ui/modal"
+import { Textarea } from "@/components/ui/textarea"
+import {
+  StandaloneTerminalView,
+  type StandaloneTerminalApi,
+} from "./StandaloneTerminalView"
 import { QuickCommandsPopover } from "./QuickCommandsPopover"
 import type { QuickCommand } from "@agent-tower/shared"
 
@@ -50,8 +56,22 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = React.memo(
       return [nextTab()]
     })
     const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0].id)
-    // Map of tab id -> sendInput function
-    const sendInputMapRef = useRef<Map<string, (data: string) => void>>(new Map())
+    const [readyTabIds, setReadyTabIds] = useState<Set<string>>(() => new Set())
+    const [isReadingClipboard, setIsReadingClipboard] = useState(false)
+    const [isPasteSheetOpen, setIsPasteSheetOpen] = useState(false)
+    const [pasteDraft, setPasteDraft] = useState("")
+    const [pasteTargetTabId, setPasteTargetTabId] = useState<string | null>(null)
+    const terminalApiMapRef = useRef<Map<string, StandaloneTerminalApi>>(new Map())
+
+    const removeTerminalApi = useCallback((tabId: string) => {
+      terminalApiMapRef.current.delete(tabId)
+      setReadyTabIds(prev => {
+        if (!prev.has(tabId)) return prev
+        const next = new Set(prev)
+        next.delete(tabId)
+        return next
+      })
+    }, [])
 
     // Add a new terminal tab
     const handleAddTab = useCallback(() => {
@@ -63,7 +83,7 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = React.memo(
     // Close a terminal tab
     const handleCloseTab = useCallback((tabId: string, e: React.MouseEvent) => {
       e.stopPropagation()
-      sendInputMapRef.current.delete(tabId)
+      removeTerminalApi(tabId)
       setTabs(prev => {
         const next = prev.filter(t => t.id !== tabId)
         if (tabId === activeTabId && next.length > 0) {
@@ -71,11 +91,11 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = React.memo(
         }
         return next
       })
-    }, [activeTabId])
+    }, [activeTabId, removeTerminalApi])
 
     // Handle terminal exit — remove the tab
     const handleTerminalExit = useCallback((tabId: string) => {
-      sendInputMapRef.current.delete(tabId)
+      removeTerminalApi(tabId)
       setTabs(prev => {
         const next = prev.filter(t => t.id !== tabId)
         if (tabId === activeTabId && next.length > 0) {
@@ -83,20 +103,85 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = React.memo(
         }
         return next
       })
-    }, [activeTabId])
+    }, [activeTabId, removeTerminalApi])
 
-    // Handle terminal ready — store sendInput ref
-    const handleTerminalReady = useCallback((tabId: string, api: { sendInput: (data: string) => void }) => {
-      sendInputMapRef.current.set(tabId, api.sendInput)
+    // Handle terminal ready — store the active input API
+    const handleTerminalReady = useCallback((tabId: string, api: StandaloneTerminalApi) => {
+      terminalApiMapRef.current.set(tabId, api)
+      setReadyTabIds(prev => {
+        if (prev.has(tabId)) return prev
+        const next = new Set(prev)
+        next.add(tabId)
+        return next
+      })
     }, [])
 
     // Execute quick command in active terminal
     const handleQuickCommand = useCallback((command: string) => {
-      const sendInput = sendInputMapRef.current.get(activeTabId)
-      if (sendInput) {
-        sendInput(command + '\r')
+      const api = terminalApiMapRef.current.get(activeTabId)
+      if (api) {
+        api.sendInput(command + '\r')
       }
     }, [activeTabId])
+
+    const openPasteSheet = useCallback((tabId: string, initialValue = "") => {
+      setPasteTargetTabId(tabId)
+      setPasteDraft(initialValue)
+      setIsPasteSheetOpen(true)
+    }, [])
+
+    const pasteIntoTerminal = useCallback((tabId: string, text: string) => {
+      const api = terminalApiMapRef.current.get(tabId)
+      if (!api) {
+        toast.error(t("Terminal is not ready"))
+        return false
+      }
+      api.paste(text)
+      toast.success(t("Pasted into terminal"))
+      return true
+    }, [t])
+
+    const handlePasteClick = useCallback(async () => {
+      if (!terminalApiMapRef.current.has(activeTabId)) {
+        toast.error(t("Terminal is not ready"))
+        return
+      }
+
+      const clipboard = navigator.clipboard
+      if (!clipboard?.readText) {
+        openPasteSheet(activeTabId)
+        return
+      }
+
+      setIsReadingClipboard(true)
+      try {
+        const text = await clipboard.readText()
+        if (!text || text.includes("\n") || text.includes("\r")) {
+          openPasteSheet(activeTabId, text)
+          return
+        }
+        pasteIntoTerminal(activeTabId, text)
+      } catch {
+        openPasteSheet(activeTabId)
+      } finally {
+        setIsReadingClipboard(false)
+      }
+    }, [activeTabId, openPasteSheet, pasteIntoTerminal, t])
+
+    const handleConfirmPaste = useCallback(() => {
+      if (!pasteDraft || !pasteTargetTabId || !pasteIntoTerminal(pasteTargetTabId, pasteDraft)) return
+      setIsPasteSheetOpen(false)
+      setPasteDraft("")
+      setPasteTargetTabId(null)
+    }, [pasteDraft, pasteIntoTerminal, pasteTargetTabId])
+
+    const handleClosePasteSheet = useCallback(() => {
+      setIsPasteSheetOpen(false)
+      setPasteDraft("")
+      setPasteTargetTabId(null)
+    }, [])
+
+    const isActiveTerminalReady = readyTabIds.has(activeTabId)
 
     return (
       <div className="flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden bg-[#1e1e1e]">
@@ -128,11 +213,31 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = React.memo(
             ))}
           </div>
 
+          {tabs.length > 0 && (
+            <>
+              <span className="mx-0.5 block h-5 w-px shrink-0 bg-[#3a3a3a] md:hidden" aria-hidden="true" />
+              <button
+                type="button"
+                onClick={handlePasteClick}
+                disabled={!isActiveTerminalReady || isReadingClipboard}
+                className="flex h-11 w-11 shrink-0 items-center justify-center text-neutral-400 transition-colors hover:bg-[#333] hover:text-neutral-100 active:bg-[#3a3a3a] disabled:cursor-not-allowed disabled:opacity-40 md:hidden"
+                title={t("Paste into terminal")}
+                aria-label={t("Paste into terminal")}
+              >
+                {isReadingClipboard
+                  ? <Loader2 size={18} className="animate-spin" />
+                  : <ClipboardPaste size={18} />}
+              </button>
+            </>
+          )}
+
           {/* Add terminal button */}
           <button
+            type="button"
             onClick={handleAddTab}
-            className="flex items-center justify-center px-2 py-1.5 text-neutral-500 hover:text-neutral-300 hover:bg-[#333] transition-colors shrink-0"
+            className="flex h-11 w-11 shrink-0 items-center justify-center text-neutral-500 transition-colors hover:bg-[#333] hover:text-neutral-300 active:bg-[#3a3a3a] md:h-auto md:w-auto md:px-2 md:py-1.5"
             title={t('New Terminal')}
+            aria-label={t('New Terminal')}
           >
             <Plus size={14} />
           </button>
@@ -183,6 +288,41 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = React.memo(
             ))
           )}
         </div>
+
+        <Modal
+          isOpen={isPasteSheetOpen}
+          onClose={handleClosePasteSheet}
+          title={t("Paste into terminal")}
+          className="fixed inset-x-0 bottom-0 max-h-[70dvh] max-w-none rounded-b-none rounded-t-lg border-x-0 border-b-0 sm:relative sm:inset-auto sm:max-w-lg sm:rounded-lg sm:border"
+          action={
+            <>
+              <button
+                type="button"
+                onClick={handleClosePasteSheet}
+                className="min-h-11 px-4 text-sm font-medium text-neutral-600 transition-colors hover:text-neutral-900"
+              >
+                {t("Cancel")}
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmPaste}
+                disabled={!pasteDraft}
+                className="min-h-11 rounded-md bg-neutral-900 px-4 text-sm font-medium text-white transition-colors hover:bg-black disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {t("Paste")}
+              </button>
+            </>
+          }
+        >
+          <Textarea
+            autoFocus
+            value={pasteDraft}
+            onChange={(event) => setPasteDraft(event.target.value)}
+            placeholder={t("Paste terminal input here")}
+            aria-label={t("Terminal paste content")}
+            className="min-h-32 resize-none bg-white font-mono"
+          />
+        </Modal>
       </div>
     )
   }

@@ -18,8 +18,13 @@ export interface StandaloneTerminalViewProps {
   isVisible?: boolean
   /** Called when the terminal process exits */
   onExit?: (exitCode: number) => void
-  /** Called when terminal is ready, exposes sendInput for external command injection */
-  onReady?: (api: { sendInput: (data: string) => void }) => void
+  /** Called when terminal is ready, exposes input APIs for external controls */
+  onReady?: (api: StandaloneTerminalApi) => void
+}
+
+export interface StandaloneTerminalApi {
+  sendInput: (data: string) => void
+  paste: (data: string) => void
 }
 
 // ============================================================
@@ -86,6 +91,9 @@ export const StandaloneTerminalView: React.FC<StandaloneTerminalViewProps> = Rea
       isVisible,
       onResize: resize,
     })
+    const paste = useCallback((data: string) => {
+      xtermRef.current?.paste(data)
+    }, [])
 
     useEffect(() => {
       if (isVisible) return
@@ -150,13 +158,13 @@ export const StandaloneTerminalView: React.FC<StandaloneTerminalViewProps> = Rea
       return () => disposable.dispose()
     }, [sendInput, isAttached])
 
-    // Expose sendInput to parent when terminal is attached
+    // Expose input APIs to parent when terminal is attached
     useEffect(() => {
       if (isAttached) {
         scheduleFit(4)
-        onReady?.({ sendInput })
+        onReady?.({ sendInput, paste })
       }
-    }, [isAttached, onReady, scheduleFit, sendInput])
+    }, [isAttached, onReady, paste, scheduleFit, sendInput])
 
     return (
       <div className="relative flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden bg-[#1e1e1e]">
