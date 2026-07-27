@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import http from 'node:http';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { normalizePreviewTarget } from '../preview.service.js';
 import { PreviewRuntimeManager, rewriteTargetCookie } from '../preview-runtime-manager.js';
 
@@ -22,8 +22,10 @@ afterEach(async () => {
 describe('PreviewRuntimeManager lifecycle', () => {
   it('starts one remote tunnel per workspace and reuses it across active leases', async () => {
     const tunnels: FakeTunnel[] = [];
+    const ensureTunnelBinary = vi.fn(async () => {});
     const manager = new PreviewRuntimeManager({
       listenHost: '127.0.0.1',
+      ensureTunnelBinary,
       createTunnel: () => {
         const tunnel = new FakeTunnel();
         tunnels.push(tunnel);
@@ -33,13 +35,17 @@ describe('PreviewRuntimeManager lifecycle', () => {
     });
     managers.push(manager);
     const target = normalizePreviewTarget('http://127.0.0.1:3000');
+    await manager.acquire('workspace-1', target, 'local', 'localhost');
 
-    const first = await manager.acquire('workspace-1', target, 'remote', 'localhost');
-    const second = await manager.acquire('workspace-1', target, 'remote', 'localhost');
+    const [first, second] = await Promise.all([
+      manager.acquire('workspace-1', target, 'remote', 'localhost'),
+      manager.acquire('workspace-1', target, 'remote', 'localhost'),
+    ]);
 
     expect(first.viewBaseUrl).toBe('https://preview-test.trycloudflare.com');
     expect(second.viewBaseUrl).toBe(first.viewBaseUrl);
     expect(tunnels).toHaveLength(1);
+    expect(ensureTunnelBinary).toHaveBeenCalledTimes(1);
   });
 
   it('stops the tunnel and local gateway after the last lease becomes idle', async () => {

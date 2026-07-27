@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Tunnel, type Tunnel as CloudflaredTunnel } from 'cloudflared';
 
 class FakeTunnel extends EventEmitter {
@@ -13,8 +13,18 @@ class FakeTunnel extends EventEmitter {
 
 const fakeTunnels: FakeTunnel[] = [];
 let nextUrl = 'https://first.trycloudflare.com';
+const originalCloudflaredBin = process.env.CLOUDFLARED_BIN;
+process.env.CLOUDFLARED_BIN = process.execPath;
+
+afterAll(() => {
+  if (originalCloudflaredBin === undefined) delete process.env.CLOUDFLARED_BIN;
+  else process.env.CLOUDFLARED_BIN = originalCloudflaredBin;
+});
 
 vi.mock('cloudflared', () => ({
+  bin: process.execPath,
+  install: vi.fn(),
+  use: vi.fn(),
   Tunnel: {
     quick: vi.fn(() => {
       const tunnel = new FakeTunnel();

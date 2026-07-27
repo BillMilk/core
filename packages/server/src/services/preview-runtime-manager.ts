@@ -8,6 +8,7 @@ import { AccessAuthService } from './access-auth.service.js';
 import type { NormalizedPreviewTarget } from './preview.service.js';
 import { ACCESS_AUTH_COOKIE_NAME } from './access-auth.service.js';
 import { TUNNEL_SESSION_COOKIE_NAME } from '../utils/tunnel-cookie.js';
+import { ensureCloudflaredBinary } from './cloudflared-runtime.js';
 
 export const PREVIEW_GATEWAY_TOKEN_PARAM = '__agent_tower_preview_token';
 export const PREVIEW_BRIDGE_PATH = '/__agent_tower_preview_bridge.js';
@@ -82,6 +83,7 @@ export interface PreviewRuntimeManagerOptions {
   listenHost?: string;
   now?: () => number;
   createTunnel?: (targetUrl: string) => PreviewTunnel;
+  ensureTunnelBinary?: () => Promise<void>;
 }
 
 const PREVIEW_BRIDGE_SCRIPT = `(() => {
@@ -479,6 +481,7 @@ export class PreviewRuntimeManager {
   private readonly listenHost: string;
   private readonly now: () => number;
   private readonly createTunnel: (targetUrl: string) => PreviewTunnel;
+  private readonly ensureTunnelBinary: () => Promise<void>;
   private readonly sweepTimer: NodeJS.Timeout;
 
   constructor(options: PreviewRuntimeManagerOptions = {}) {
@@ -488,6 +491,8 @@ export class PreviewRuntimeManager {
     this.now = options.now ?? (() => Date.now());
     this.createTunnel = options.createTunnel
       ?? ((targetUrl) => Tunnel.quick(targetUrl, QUICK_TUNNEL_OPTIONS));
+    this.ensureTunnelBinary = options.ensureTunnelBinary
+      ?? (options.createTunnel ? async () => {} : ensureCloudflaredBinary);
     this.sweepTimer = setInterval(() => {
       void this.sweep();
     }, options.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
@@ -844,45 +849,48 @@ export class PreviewRuntimeManager {
     if (runtime.tunnel && runtime.tunnelUrl) return runtime.tunnelUrl;
     if (runtime.tunnelStartPromise) return runtime.tunnelStartPromise;
 
-    const startPromise = new Promise<string>((resolve, reject) => {
-      const tunnel = this.createTunnel(`http://127.0.0.1:${runtime.port}`);
-      runtime.tunnel = tunnel;
-      let settled = false;
-      const timer = setTimeout(() => settle(reject, new Error('Preview tunnel startup timed out')), TUNNEL_STARTUP_TIMEOUT_MS);
+    const startPromise = (async () => {
+      await this.ensureTunnelBinary();
+      return new Promise<string>((resolve, reject) => {
+        const tunnel = this.createTunnel(`http://127.0.0.1:${runtime.port}`);
+        runtime.tunnel = tunnel;
+        let settled = false;
+        const timer = setTimeout(() => settle(reject, new Error('Preview tunnel startup timed out')), TUNNEL_STARTUP_TIMEOUT_MS);
 
-      const cleanup = () => {
-        clearTimeout(timer);
-        tunnel.off('url', onUrl);
-        tunnel.off('error', onError);
-        tunnel.off('exit', onExitBeforeReady);
-      };
-      const settle = <T>(done: (value: T) => void, value: T) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        done(value);
-      };
-      const onUrl = (url: string) => {
-        runtime.tunnelUrl = url.replace(/\/$/, '');
-        settle(resolve, runtime.tunnelUrl);
-      };
-      const onError = (error: Error) => settle(reject, error);
-      const onExitBeforeReady = (code: number | null, signal: NodeJS.Signals | null) => {
-        settle(reject, new Error(`Preview tunnel exited before ready (${code ?? signal ?? 'unknown'})`));
-      };
+        const cleanup = () => {
+          clearTimeout(timer);
+          tunnel.off('url', onUrl);
+          tunnel.off('error', onError);
+          tunnel.off('exit', onExitBeforeReady);
+        };
+        const settle = <T>(done: (value: T) => void, value: T) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          done(value);
+        };
+        const onUrl = (url: string) => {
+          runtime.tunnelUrl = url.replace(/\/$/, '');
+          settle(resolve, runtime.tunnelUrl);
+        };
+        const onError = (error: Error) => settle(reject, error);
+        const onExitBeforeReady = (code: number | null, signal: NodeJS.Signals | null) => {
+          settle(reject, new Error(`Preview tunnel exited before ready (${code ?? signal ?? 'unknown'})`));
+        };
 
-      tunnel.once('url', onUrl);
-      tunnel.once('error', onError);
-      tunnel.once('exit', onExitBeforeReady);
-      tunnel.on('error', () => {
-        // The session heartbeat will recreate a failed tunnel when needed.
+        tunnel.once('url', onUrl);
+        tunnel.once('error', onError);
+        tunnel.once('exit', onExitBeforeReady);
+        tunnel.on('error', () => {
+          // The session heartbeat will recreate a failed tunnel when needed.
+        });
+        tunnel.on('exit', () => {
+          if (runtime.tunnel !== tunnel) return;
+          runtime.tunnel = null;
+          runtime.tunnelUrl = null;
+        });
       });
-      tunnel.on('exit', () => {
-        if (runtime.tunnel !== tunnel) return;
-        runtime.tunnel = null;
-        runtime.tunnelUrl = null;
-      });
-    });
+    })();
     runtime.tunnelStartPromise = startPromise;
 
     try {

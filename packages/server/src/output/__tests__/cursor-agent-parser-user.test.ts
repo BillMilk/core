@@ -179,12 +179,12 @@ describe('CursorAgentParser interaction_query (web_search / web_fetch) handling'
 
     const searchEntry = toolEntries[0]
     expect(searchEntry.metadata?.toolName).toBe('web_search')
-    expect(searchEntry.content).toBe('今天天气')
+    expect(searchEntry.content).toBe('今天天气\n\n晴天 25°C')
     expect(searchEntry.metadata?.status).toBe('success')
 
     const fetchEntry = toolEntries[1]
     expect(fetchEntry.metadata?.toolName).toBe('web_fetch')
-    expect(fetchEntry.content).toBe('https://example.com')
+    expect(fetchEntry.content).toBe('https://example.com\n\n<html>...</html>')
     expect(fetchEntry.metadata?.status).toBe('success')
   })
 })
