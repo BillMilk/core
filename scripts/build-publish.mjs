@@ -69,122 +69,38 @@ mkdirSync(sharedDest, { recursive: true });
 cpSync(resolve(sharedDir, 'dist'), resolve(sharedDest, 'dist'), { recursive: true });
 cpSync(resolve(sharedDir, 'package.json'), resolve(sharedDest, 'package.json'));
 
-// 6. 将预生成的 Prisma Client 打包进 node_modules（避免全局安装时 prisma generate 出错）
-const prismaClientSrc = resolve(root, 'node_modules/.pnpm/@prisma+client@5.22.0_prisma@5.22.0/node_modules');
-// @prisma/client — 包的入口，require('.prisma/client/default')
-const atPrismaClientSrc = resolve(prismaClientSrc, '@prisma/client');
-const atPrismaDest = resolve(publishDir, 'node_modules/@prisma/client');
-mkdirSync(atPrismaDest, { recursive: true });
-cpSync(atPrismaClientSrc, atPrismaDest, {
-  recursive: true,
-  filter: (src) => {
-    const rel = src.slice(atPrismaClientSrc.length);
-    return !rel.includes('node_modules');
-  },
-});
-// 将生成好的 Prisma Client 放到 bundled @prisma/client 包内
-const generatedPrismaClientSrc = resolve(prismaClientSrc, '.prisma/client');
-const atPrismaPackageClientDest = resolve(atPrismaDest, '.prisma/client');
-mkdirSync(atPrismaPackageClientDest, { recursive: true });
-cpSync(generatedPrismaClientSrc, atPrismaPackageClientDest, { recursive: true });
-const atPrismaPkgPath = resolve(atPrismaDest, 'package.json');
-const atPrismaPkg = JSON.parse(readFileSync(atPrismaPkgPath, 'utf-8'));
-atPrismaPkg.files = [...new Set([...(atPrismaPkg.files ?? []), '.prisma'])];
-if (atPrismaPkg.scripts) {
-  // The generated client is bundled below. Running @prisma/client postinstall
-  // during global installs can leave node_modules/.prisma/client as the default
-  // uninitialized stub when Prisma cannot find this package's schema.
-  delete atPrismaPkg.scripts.generate;
-  delete atPrismaPkg.scripts.postinstall;
-}
-writeFileSync(atPrismaPkgPath, JSON.stringify(atPrismaPkg, null, 2) + '\n');
+// Prisma stays as a regular dependency so npm installs engines for the target machine.
+// cloudflared's JS wrapper is bundled without its publish-machine binary; the
+// server downloads the correct binary on first tunnel start.
 
-// @prisma/client's published proxy files normally import ".prisma/client/*",
-// which resolves to packageRoot/node_modules/.prisma. npm does not preserve that
-// package-root hidden directory from our assembled node_modules unless it is a
-// bundled dependency, so point the proxies at the generated client copied inside
-// the bundled @prisma/client package instead.
-for (const file of [
-  'default.js',
-  'index.js',
-  'edge.js',
-  'wasm.js',
-  'index-browser.js',
-  'react-native.js',
-  'sql.js',
-  'sql.mjs',
-  'default.d.ts',
-  'index.d.ts',
-  'edge.d.ts',
-  'wasm.d.ts',
-  'react-native.d.ts',
-  'sql.d.ts',
-]) {
-  const proxyPath = resolve(atPrismaDest, file);
-  if (!existsSync(proxyPath)) continue;
-  const content = readFileSync(proxyPath, 'utf-8')
-    .replaceAll("require('.prisma/client", "require('./.prisma/client")
-    .replaceAll("from '.prisma/client", "from './.prisma/client")
-    .replaceAll("from '../../.prisma/client", "from './.prisma/client");
-  writeFileSync(proxyPath, content);
-}
+// 6. 生成发布用 package.json
+const deps = { ...serverPkg.dependencies };
+// 替换 workspace 协议为真实版本
+deps['@agent-tower/shared'] = sharedPkg.version;
+// node-pty 保留在 dependencies 中（bundledDependencies 要求包必须同时在 dependencies 中声明）
+// bundled 的预编译版本会优先使用，npm 不会再触发远程安装/node-gyp
 
-// 7. 将 prisma CLI 和 @prisma/engines 预打包（避免全局安装时 postinstall 脚本失败）
-const prismaSrc = resolve(root, 'node_modules/.pnpm/prisma@5.22.0/node_modules');
-// prisma CLI
-const prismaDest = resolve(publishDir, 'node_modules/prisma');
-mkdirSync(prismaDest, { recursive: true });
-cpSync(resolve(prismaSrc, 'prisma'), prismaDest, {
-  recursive: true,
-  filter: (src) => {
-    const rel = src.slice(resolve(prismaSrc, 'prisma').length);
-    return !rel.includes('node_modules');
-  },
-});
-// @prisma/engines 及其完整依赖链（@prisma/debug, @prisma/fetch-engine, @prisma/get-platform 等）
-const enginesFullSrc = resolve(root, 'node_modules/.pnpm/@prisma+engines@5.22.0/node_modules/@prisma');
-const enginesFullDest = resolve(prismaDest, 'node_modules/@prisma');
-mkdirSync(enginesFullDest, { recursive: true });
-cpSync(enginesFullSrc, enginesFullDest, { recursive: true, dereference: true });
-
-// 8. 将 cloudflared 预打包（包含安装期下载的二进制，避免生产环境找不到或重新下载）
 const cloudflaredVersion = serverPkg.dependencies.cloudflared.replace(/^[~^]/, '');
-const cloudflaredPnpmDir = resolve(root, `node_modules/.pnpm/cloudflared@${cloudflaredVersion}/node_modules/cloudflared`);
+const cloudflaredSrc = resolve(root, `node_modules/.pnpm/cloudflared@${cloudflaredVersion}/node_modules/cloudflared`);
 const cloudflaredDest = resolve(publishDir, 'node_modules/cloudflared');
-mkdirSync(cloudflaredDest, { recursive: true });
-cpSync(cloudflaredPnpmDir, cloudflaredDest, {
+cpSync(cloudflaredSrc, cloudflaredDest, {
   recursive: true,
   dereference: true,
   filter: (src) => {
-    const rel = src.slice(cloudflaredPnpmDir.length);
-    return !rel.includes('node_modules');
+    const rel = src.slice(cloudflaredSrc.length);
+    return !rel.includes('node_modules') && !/[\\/]bin(?:[\\/]|$)/.test(rel);
   },
 });
-const cloudflaredBin = resolve(cloudflaredDest, process.platform === 'win32' ? 'bin/cloudflared.exe' : 'bin/cloudflared');
-if (!existsSync(cloudflaredBin)) {
-  throw new Error(`cloudflared binary was not copied: ${cloudflaredBin}`);
-}
-chmodSync(cloudflaredBin, 0o755);
 const cloudflaredPkgPath = resolve(cloudflaredDest, 'package.json');
 const cloudflaredPkg = JSON.parse(readFileSync(cloudflaredPkgPath, 'utf-8'));
-cloudflaredPkg.files = [...new Set([...(cloudflaredPkg.files ?? []), 'bin'])];
 if (cloudflaredPkg.scripts) {
   delete cloudflaredPkg.scripts.postinstall;
 }
 writeFileSync(cloudflaredPkgPath, JSON.stringify(cloudflaredPkg, null, 2) + '\n');
 rmSync(resolve(cloudflaredDest, 'scripts/postinstall.mjs'), { force: true });
-console.log(`Bundled cloudflared@${cloudflaredVersion} with binary`);
+console.log(`Bundled cloudflared@${cloudflaredVersion} JS wrapper without a native binary`);
 
-// 9. 生成发布用 package.json
-const deps = { ...serverPkg.dependencies };
-// 替换 workspace 协议为真实版本
-deps['@agent-tower/shared'] = sharedPkg.version;
-// prisma 是 CLI 启动期依赖：server CLI 用它执行 db push。
-deps['prisma'] = serverPkg.dependencies.prisma;
-// node-pty 保留在 dependencies 中（bundledDependencies 要求包必须同时在 dependencies 中声明）
-// bundled 的预编译版本会优先使用，npm 不会再触发远程安装/node-gyp
-
-// 10. 将 @shitiandmw/node-pty 预打包（含多平台 prebuilds，避免用户需要 Python/node-gyp/MSVC）
+// 7. 将 @shitiandmw/node-pty 预打包（含多平台 prebuilds，避免用户需要 Python/node-gyp/MSVC）
 const nodePtyVersion = serverPkg.dependencies['@shitiandmw/node-pty'];
 const nodePtyPnpmDir = resolve(root, `node_modules/.pnpm/@shitiandmw+node-pty@${nodePtyVersion}/node_modules/@shitiandmw/node-pty`);
 const nodePtyDest = resolve(publishDir, 'node_modules/@shitiandmw/node-pty');
@@ -234,19 +150,17 @@ const publishPkg = {
     'prisma/',
     'scripts/',
     'node_modules/@agent-tower/',
-    'node_modules/@prisma/',
     'node_modules/@shitiandmw/',
     'node_modules/cloudflared/',
-    'node_modules/prisma/',
   ],
   scripts: {
-    postinstall: 'node scripts/postinstall.js',
+    postinstall: 'prisma generate --schema prisma/schema.prisma && node scripts/postinstall.js',
   },
   dependencies: deps,
   optionalDependencies: {
     fsevents: '~2.3.3',
   },
-  bundledDependencies: ['@agent-tower/shared', '@prisma/client', '@shitiandmw/node-pty', 'cloudflared', 'prisma'],
+  bundledDependencies: ['@agent-tower/shared', '@shitiandmw/node-pty', 'cloudflared'],
   engines: {
     node: '>=18.0.0',
   },
@@ -265,7 +179,7 @@ cpSync(resolve(root, 'README.md'), resolve(publishDir, 'README.md'));
 console.log(`\nPublish package ready at: ${publishDir}`);
 console.log('\nTo publish:');
 console.log(`  cd ${publishDir}`);
-console.log('  npm publish');
+console.log('  npm publish --tag latest');
 console.log('\nTo test locally:');
 console.log(`  cd ${publishDir}`);
 console.log('  npm pack');

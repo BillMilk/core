@@ -1,5 +1,6 @@
 import { Tunnel } from 'cloudflared';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { ensureCloudflaredBinary } from './cloudflared-runtime.js';
 
 export type TunnelHealthStatus =
   | 'stopped'
@@ -312,7 +313,15 @@ async function startTunnel(port: number, nextStatus: TunnelHealthStatus): Promis
   state.targetPort = port;
   state.targetOrigin = targetOrigin;
 
-  const tunnel = Tunnel.quick(targetOrigin, TUNNEL_QUICK_OPTIONS);
+  let tunnel: Tunnel;
+  try {
+    await ensureCloudflaredBinary();
+    tunnel = Tunnel.quick(targetOrigin, TUNNEL_QUICK_OPTIONS);
+  } catch (err) {
+    resetRuntimeState('error');
+    state.lastError = sanitizeError(err);
+    throw err;
+  }
   state.tunnel = tunnel;
   attachTunnelDiagnostics(tunnel);
 

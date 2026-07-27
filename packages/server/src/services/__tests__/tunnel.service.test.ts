@@ -15,6 +15,8 @@ const fakeTunnels: FakeTunnel[] = [];
 let nextUrl = 'https://first.trycloudflare.com';
 
 vi.mock('cloudflared', () => ({
+  bin: process.execPath,
+  install: vi.fn(),
   Tunnel: {
     quick: vi.fn(() => {
       const tunnel = new FakeTunnel();

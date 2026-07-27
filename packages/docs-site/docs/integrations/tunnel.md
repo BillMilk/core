@@ -7,6 +7,8 @@ description: 从外网访问本机 Agent Tower。
 
 Tunnel 用来把本地 Agent Tower 临时暴露到外网，方便手机或其他设备访问。
 
+首次启动 Tunnel 时，Agent Tower 会按当前操作系统和 CPU 架构下载对应的 `cloudflared` 二进制。此步骤需要能够访问 GitHub Releases；后续启动会复用已经下载的文件。
+
 ## 接口
 
 | 接口 | 作用 |
