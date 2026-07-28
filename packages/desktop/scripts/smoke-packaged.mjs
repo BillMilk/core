@@ -177,19 +177,13 @@ try {
   if (mcpConfig.command === 'agent-tower-mcp' || mcpConfig.config?.mcpServers?.['agent-tower']?.command === 'agent-tower-mcp') {
     throw new Error('Packaged MCP config uses global agent-tower-mcp command');
   }
-  if (process.platform === 'win32') {
-    const command = String(mcpConfig.command || '').replaceAll('\\', '/');
-    if (!command.endsWith('/runtime/node/node.exe')) {
-      throw new Error(`Packaged Windows MCP config command is not bundled node.exe: ${mcpConfig.command}`);
-    }
-    if (mcpConfig.env?.ELECTRON_RUN_AS_NODE) {
-      throw new Error('Packaged Windows MCP config should not use ELECTRON_RUN_AS_NODE');
-    }
-  } else if (mcpConfig.command !== executable) {
-    throw new Error(`Packaged MCP config command is not the app executable: ${mcpConfig.command}`);
+  const command = String(mcpConfig.command || '').replaceAll('\\', '/');
+  const expectedNodeSuffix = process.platform === 'win32' ? '/runtime/node/node.exe' : '/runtime/node/node';
+  if (!command.endsWith(expectedNodeSuffix)) {
+    throw new Error(`Packaged MCP config command is not bundled Node: ${mcpConfig.command}`);
   }
-  if (process.platform !== 'win32' && (!mcpConfig.env || mcpConfig.env.ELECTRON_RUN_AS_NODE !== '1')) {
-    throw new Error('Packaged MCP config is missing ELECTRON_RUN_AS_NODE=1');
+  if (mcpConfig.env?.ELECTRON_RUN_AS_NODE) {
+    throw new Error('Packaged MCP config should not use ELECTRON_RUN_AS_NODE');
   }
   const mcpEntryArg = String(mcpConfig.args?.[0] || '').replaceAll('\\', '/');
   if (!mcpEntryArg.includes('runtime/server/dist/mcp/index.js')) {

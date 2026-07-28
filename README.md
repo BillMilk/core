@@ -56,7 +56,7 @@ agent-tower
 
 Open `http://localhost:12580` and start using it.
 
-> Prerequisite: Node.js >= 18
+> Prerequisite: Node.js >= 22.19.0
 
 ### Configure MCP (Optional)
 

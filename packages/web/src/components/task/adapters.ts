@@ -73,6 +73,16 @@ export function formatAgentType(agentType: AgentType): string {
       return 'Codex'
     case AgentType.QWEN_CODE:
       return 'Qwen Code'
+    case AgentType.KIRO_CLI:
+      return 'Kiro CLI'
+    case AgentType.OPENCODE:
+      return 'OpenCode'
+    case AgentType.PI_CODING_AGENT:
+      return 'Pi Coding Agent'
+    case AgentType.GROK_BUILD:
+      return 'Grok Build'
+    case AgentType.MINION_CODE:
+      return 'Minion Code'
   }
 }
 

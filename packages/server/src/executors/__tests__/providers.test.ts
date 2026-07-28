@@ -229,17 +229,24 @@ describe('providers backup/import', () => {
     expect(getDefaultProvider(AgentType.CLAUDE_CODE, RuntimeType.CLI)?.id).toBe('claude-code-default');
     expect(getDefaultProvider(AgentType.CLAUDE_CODE, RuntimeType.ACP)?.id).toBe('claude-code-acp-default');
     expect(getDefaultProvider(AgentType.QWEN_CODE, RuntimeType.ACP)?.id).toBe('qwen-code-acp-default');
+    expect(getDefaultProvider(AgentType.GEMINI_CLI, RuntimeType.ACP)?.id).toBe('gemini-cli-acp-default');
+    expect(getDefaultProvider(AgentType.CURSOR_AGENT, RuntimeType.ACP)?.id).toBe('cursor-agent-acp-default');
+    expect(getDefaultProvider(AgentType.KIRO_CLI, RuntimeType.ACP)?.id).toBe('kiro-cli-acp-default');
+    expect(getDefaultProvider(AgentType.OPENCODE, RuntimeType.ACP)?.id).toBe('opencode-acp-default');
+    expect(getDefaultProvider(AgentType.PI_CODING_AGENT, RuntimeType.ACP)?.id).toBe('pi-coding-agent-acp-default');
+    expect(getDefaultProvider(AgentType.GROK_BUILD, RuntimeType.ACP)?.id).toBe('grok-build-acp-default');
+    expect(getDefaultProvider(AgentType.MINION_CODE, RuntimeType.ACP)?.id).toBe('minion-code-acp-default');
   });
 
   it('rejects unsupported Agent/Runtime combinations', () => {
     expect(() => createProvider({
-      name: 'Gemini ACP',
-      agentType: AgentType.GEMINI_CLI,
-      runtimeType: RuntimeType.ACP,
+      name: 'Kiro CLI Runtime',
+      agentType: AgentType.KIRO_CLI,
+      runtimeType: RuntimeType.CLI,
       env: {},
       config: {},
       isDefault: false,
-    })).toThrow(/does not support the 'ACP' runtime/);
+    })).toThrow(/does not support the 'CLI' runtime/);
 
     expect(() => createProvider({
       name: 'Qwen CLI',

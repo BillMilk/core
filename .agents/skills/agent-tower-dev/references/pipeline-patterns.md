@@ -14,6 +14,9 @@ SessionManager -> RuntimeCoordinator -> CLI Driver -> Executor / PTY / AgentPipe
 - CLI Driver 选择 Executor，并拥有 PTY、AgentPipeline、Parser、early event 和真实 child 退出跟踪。
 - 通用 ACP Driver 拥有 adapter/native ACP process、initialize、session new/load、prompt/cancel、权限响应和协议清理；ACP stdout 不进入普通日志。
 - ACP Agent Registry 按 `AgentType` 选择 Definition；Definition 负责 Provider 投影、可执行文件/adapter 解析、可用性、Session metadata 与 Agent 专属 model/effort/mode 配置。新增 ACP Agent 不复制 Driver。
+- 稳定 ACP Definition 目录包含 Claude Code、Codex、Qwen Code、Gemini CLI、Cursor Agent、Kiro CLI、OpenCode、Pi Coding Agent、Grok Build 和 Minion Code。`AgentType` 表示身份，不能再为 adapter 另造 `PI_ACP` 一类身份；运行协议只由 `RuntimeType.ACP` 表达。
+- Native ACP 客户端共用 Definition 工厂完成可执行文件解析、Provider 投影和 Session 配置。Claude Code 与 Codex 的 adapter 及兼容 Runtime 通过 server 的固定 adapter 依赖随 Agent Tower 发布，显式 executable env 有效时才覆盖内置 Runtime；Pi CLI 作为 server production dependency 发布，默认解析 server `node_modules/.bin/pi`，仅由有效的 `PI_CODING_AGENT_PATH`/`PI_PATH` 覆盖。Pi MCP 通过隔离 `PI_CODING_AGENT_DIR`、Pi settings 和 `pi-mcp-adapter` 接入，Minion MCP 通过隔离 `PYTHONPATH` bridge 接入。不要 patch 第三方 adapter，也不要写用户全局配置。
+- Definition 创建的临时配置可能包含内部 MCP token，必须使用 `0700` 目录和 `0600` 文件，并把幂等 cleanup 交给 ACP Driver；启动/握手失败、正常 close 和进程意外退出都必须触发清理。
 - Runtime/Agent 专属的 Provider 协议元数据与兼容 Header 放在 Definition 投影层，并合并用户自定义配置；通用 ACP Driver 不感知具体网关认证或来源标识。
 - Parser/ACP Projector 将输出转为 `NormalizedEntry` JSON Patch；MsgStore 生成统一 snapshot。
 - ACP `tool_call_update` 是按 `toolCallId` 发送的局部更新；Projector 必须累计并合并工具状态，省略字段沿用旧值、显式 `null` 清除字段。保留 title/kind/status/content/locations/input/output 的结构化语义，不能用单次 update 重建并覆盖完整工具条目；ACP `pending` 也不等同于独立的 permission request。

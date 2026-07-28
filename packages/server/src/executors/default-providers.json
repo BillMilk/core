@@ -78,6 +78,76 @@
       },
       "isDefault": true,
       "builtIn": true
+    },
+    {
+      "id": "gemini-cli-acp-default",
+      "name": "Gemini CLI (ACP)",
+      "agentType": "GEMINI_CLI",
+      "runtimeType": "ACP",
+      "env": {},
+      "config": { "permissionMode": "ASK" },
+      "isDefault": true,
+      "builtIn": true
+    },
+    {
+      "id": "cursor-agent-acp-default",
+      "name": "Cursor Agent (ACP)",
+      "agentType": "CURSOR_AGENT",
+      "runtimeType": "ACP",
+      "env": {},
+      "config": { "permissionMode": "ASK" },
+      "isDefault": true,
+      "builtIn": true
+    },
+    {
+      "id": "kiro-cli-acp-default",
+      "name": "Kiro CLI (ACP)",
+      "agentType": "KIRO_CLI",
+      "runtimeType": "ACP",
+      "env": {},
+      "config": { "permissionMode": "ASK" },
+      "isDefault": true,
+      "builtIn": true
+    },
+    {
+      "id": "opencode-acp-default",
+      "name": "OpenCode (ACP)",
+      "agentType": "OPENCODE",
+      "runtimeType": "ACP",
+      "env": {},
+      "config": { "permissionMode": "ASK" },
+      "isDefault": true,
+      "builtIn": true
+    },
+    {
+      "id": "pi-coding-agent-acp-default",
+      "name": "Pi Coding Agent (ACP)",
+      "agentType": "PI_CODING_AGENT",
+      "runtimeType": "ACP",
+      "env": {},
+      "config": { "permissionMode": "ASK" },
+      "isDefault": true,
+      "builtIn": true
+    },
+    {
+      "id": "grok-build-acp-default",
+      "name": "Grok Build (ACP)",
+      "agentType": "GROK_BUILD",
+      "runtimeType": "ACP",
+      "env": {},
+      "config": { "permissionMode": "ASK" },
+      "isDefault": true,
+      "builtIn": true
+    },
+    {
+      "id": "minion-code-acp-default",
+      "name": "Minion Code (ACP)",
+      "agentType": "MINION_CODE",
+      "runtimeType": "ACP",
+      "env": {},
+      "config": { "permissionMode": "ASK" },
+      "isDefault": true,
+      "builtIn": true
     }
   ]
 }

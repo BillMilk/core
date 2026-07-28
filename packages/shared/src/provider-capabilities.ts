@@ -117,6 +117,53 @@ export const PROVIDER_CAPABILITIES: ProviderCapabilityMatrix = {
     model: { kind: 'config', path: 'model', placeholder: 'qwen3-coder-plus' },
     executionPermission: { kind: 'config', path: 'yolo', riskKind: 'auto-approve' },
   },
+  [AgentType.KIRO_CLI]: {
+    agentType: AgentType.KIRO_CLI,
+    model: { kind: 'config', path: 'model' },
+    reasoningEffort: {
+      kind: 'config',
+      path: 'effort',
+      options: ['low', 'medium', 'high', 'xhigh', 'max'],
+    },
+    executionPermission: { kind: 'config', path: 'trustAllTools', riskKind: 'auto-approve' },
+  },
+  [AgentType.OPENCODE]: {
+    agentType: AgentType.OPENCODE,
+    apiBaseUrl: { kind: 'env', path: 'OPENAI_BASE_URL', placeholder: 'https://api.openai.com/v1' },
+    apiKey: { kind: 'env', path: 'OPENAI_API_KEY' },
+    model: { kind: 'config', path: 'model' },
+    executionPermission: { kind: 'config', path: 'autoApprove', riskKind: 'auto-approve' },
+  },
+  [AgentType.PI_CODING_AGENT]: {
+    agentType: AgentType.PI_CODING_AGENT,
+    apiBaseUrl: { kind: 'env', path: 'OPENAI_BASE_URL', placeholder: 'https://api.openai.com/v1' },
+    apiKey: { kind: 'env', path: 'OPENAI_API_KEY' },
+    model: { kind: 'config', path: 'model' },
+    reasoningEffort: {
+      kind: 'config',
+      path: 'effort',
+      options: ['minimal', 'low', 'medium', 'high', 'xhigh'],
+    },
+    executionPermission: { kind: 'config', path: 'autoApprove', riskKind: 'auto-approve' },
+  },
+  [AgentType.GROK_BUILD]: {
+    agentType: AgentType.GROK_BUILD,
+    apiBaseUrl: { kind: 'env', path: 'OPENAI_BASE_URL', placeholder: 'https://api.x.ai/v1' },
+    apiKey: { kind: 'env', path: 'OPENAI_API_KEY' },
+    model: { kind: 'config', path: 'model' },
+    executionPermission: { kind: 'config', path: 'alwaysApprove', riskKind: 'auto-approve' },
+  },
+  [AgentType.MINION_CODE]: {
+    agentType: AgentType.MINION_CODE,
+    apiBaseUrl: { kind: 'env', path: 'OPENAI_BASE_URL', placeholder: 'https://api.openai.com/v1' },
+    apiKey: { kind: 'env', path: 'OPENAI_API_KEY' },
+    model: { kind: 'config', path: 'model' },
+    executionPermission: {
+      kind: 'config',
+      path: 'dangerouslySkipPermissions',
+      riskKind: 'skip-permissions',
+    },
+  },
 }
 
 export function getProviderCapability(agentType: AgentType | string): ProviderCapability | undefined {

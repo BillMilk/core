@@ -56,7 +56,7 @@ agent-tower
 
 打开 `http://localhost:12580`，开始使用。
 
-> 前置要求：Node.js >= 18
+> 前置要求：Node.js >= 22.19.0
 
 ### 配置 MCP（可选）
 

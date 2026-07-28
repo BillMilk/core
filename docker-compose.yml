@@ -7,7 +7,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        NODE_VERSION: ${NODE_VERSION:-22.12.0}
+        NODE_VERSION: ${NODE_VERSION:-22.19.0}
         PNPM_VERSION: ${PNPM_VERSION:-10.24.0}
         CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.142.4}
         CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-2.1.196}

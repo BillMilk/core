@@ -53,6 +53,14 @@ export async function systemRoutes(app: FastifyInstance) {
       agents: [
         { type: AgentType.CLAUDE_CODE, name: 'Claude Code', available: false },
         { type: AgentType.GEMINI_CLI, name: 'Gemini CLI', available: false },
+        { type: AgentType.CURSOR_AGENT, name: 'Cursor Agent', available: false },
+        { type: AgentType.CODEX, name: 'Codex', available: false },
+        { type: AgentType.QWEN_CODE, name: 'Qwen Code', available: false },
+        { type: AgentType.KIRO_CLI, name: 'Kiro CLI', available: false },
+        { type: AgentType.OPENCODE, name: 'OpenCode', available: false },
+        { type: AgentType.PI_CODING_AGENT, name: 'Pi Coding Agent', available: false },
+        { type: AgentType.GROK_BUILD, name: 'Grok Build', available: false },
+        { type: AgentType.MINION_CODE, name: 'Minion Code', available: false },
       ],
     };
   });

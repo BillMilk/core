@@ -4,7 +4,7 @@ import * as acp from '@agentclientprotocol/sdk';
 import { AgentType } from '@agent-tower/shared';
 import { which } from '../../../utils/index.js';
 import { AgentRuntimeError } from '../../errors.js';
-import { resolveBundledClaudeExecutable } from './executable-resolution.js';
+import { isExecutableFile, resolveBundledClaudeExecutable } from './executable-resolution.js';
 import type { AcpAgentDefinition, AcpAgentProfile } from './types.js';
 
 const require = createRequire(import.meta.url);
@@ -69,8 +69,16 @@ function projectClaudeProvider(
 }
 
 async function resolveClaudePath(environment: NodeJS.ProcessEnv): Promise<string | null> {
-  const configured = environment.CLAUDE_PATH ?? environment.CLAUDE_CODE_EXECUTABLE;
-  if (configured && path.isAbsolute(configured)) return configured;
+  for (const key of ['CLAUDE_PATH', 'CLAUDE_CODE_EXECUTABLE']) {
+    const configured = environment[key]?.trim();
+    if (!configured) continue;
+    if (path.isAbsolute(configured)) {
+      if (await isExecutableFile(configured)) return configured;
+      continue;
+    }
+    const resolved = await which(configured, { env: environment });
+    if (resolved) return resolved;
+  }
   return resolveBundledClaudeExecutable() ?? which('claude', { env: environment });
 }
 

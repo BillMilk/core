@@ -99,7 +99,7 @@ describe('AcpRuntimeDriver', () => {
 
     await expect(driver.open({
       towerSessionId: 'tower-1',
-      agentType: AgentType.GEMINI_CLI,
+      agentType: 'UNKNOWN_AGENT' as AgentType,
       runtimeType: RuntimeType.ACP,
       variant: 'DEFAULT',
       workingDir: process.cwd(),

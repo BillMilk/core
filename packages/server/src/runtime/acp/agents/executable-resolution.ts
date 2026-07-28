@@ -1,5 +1,8 @@
 import { createRequire } from 'node:module';
+import { constants, existsSync } from 'node:fs';
+import { access, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 
@@ -33,6 +36,15 @@ export function resolveBundledClaudeExecutable(): string | undefined {
   return undefined;
 }
 
+export function resolveBundledCodexEntrypoint(): string | undefined {
+  try {
+    const adapterPath = require.resolve('@agentclientprotocol/codex-acp');
+    return createRequire(adapterPath).resolve('@openai/codex/bin/codex.js');
+  } catch {
+    return undefined;
+  }
+}
+
 export function claudePlatformPackageNames(): string[] {
   if (process.platform !== 'linux') {
     return [`claude-agent-sdk-${process.platform}-${process.arch}`];
@@ -42,4 +54,31 @@ export function claudePlatformPackageNames(): string[] {
   return report?.header?.glibcVersionRuntime
     ? [prefix, `${prefix}-musl`]
     : [`${prefix}-musl`, prefix];
+}
+
+export function resolveBundledPiExecutable(): string | undefined {
+  const serverPackageRoot = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '..',
+    '..',
+    '..',
+    '..',
+  );
+  const executable = path.join(
+    serverPackageRoot,
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'pi.cmd' : 'pi',
+  );
+  return existsSync(executable) ? executable : undefined;
+}
+
+export async function isExecutableFile(target: string): Promise<boolean> {
+  try {
+    if (!(await stat(target)).isFile()) return false;
+    await access(target, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }

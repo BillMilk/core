@@ -108,9 +108,7 @@ function getRuntimePaths(): RuntimePaths {
       serverCliPath: path.join(runtimeRoot, 'server/dist/cli.js'),
       serverCwd: path.join(runtimeRoot, 'server'),
       mcpEntryPath: path.join(runtimeRoot, 'server/dist/mcp/index.js'),
-      nodeRuntimePath: process.platform === 'win32'
-        ? path.join(runtimeRoot, 'node/node.exe')
-        : null,
+      nodeRuntimePath: path.join(runtimeRoot, 'node', process.platform === 'win32' ? 'node.exe' : 'node'),
       webDistPath: path.join(runtimeRoot, 'web'),
     };
   }
@@ -155,8 +153,8 @@ function requireBuiltAssets(paths: RuntimePaths): void {
 }
 
 function getBackendNodeCommand(paths: RuntimePaths): string {
-  if (shouldUsePackagedRuntime()) {
-    return paths.nodeRuntimePath || process.execPath;
+  if (paths.packagedRuntime) {
+    return paths.nodeRuntimePath!;
   }
   return process.env.AGENT_TOWER_DESKTOP_NODE || 'node';
 }
@@ -288,11 +286,8 @@ async function startBackend(): Promise<string> {
   if (runtimePaths.packagedRuntime) {
     const backendNodeCommand = getBackendNodeCommand(runtimePaths);
     env.AGENT_TOWER_NODE_RUNTIME = backendNodeCommand;
-    if (backendNodeCommand === process.execPath) {
-      env.ELECTRON_RUN_AS_NODE = '1';
-    } else {
-      delete env.ELECTRON_RUN_AS_NODE;
-    }
+    env.PATH = [path.dirname(backendNodeCommand), env.PATH].filter(Boolean).join(path.delimiter);
+    delete env.ELECTRON_RUN_AS_NODE;
   }
 
   const child = spawn(getBackendNodeCommand(runtimePaths), args, {

@@ -15,7 +15,7 @@ pnpm --filter @agent-tower/desktop spike
 
 The `spike` script builds `shared`, `server`, `web`, and `desktop`, then starts Electron.
 
-The desktop package currently pins Electron `33.4.11`, which keeps the dev dependency compatible with the repository's Node `>=18` baseline. The workspace `onlyBuiltDependencies` config allows Electron's install script so the local Electron binary can be downloaded during `pnpm install`.
+The desktop package currently pins Electron `33.4.11`. Development and packaging require Node `>=22.19.0`; packaged apps carry that Node runtime separately instead of relying on Electron's embedded Node. The workspace `onlyBuiltDependencies` config allows Electron's install script so the local Electron binary can be downloaded during `pnpm install`.
 
 To verify the Electron binary is available:
 
@@ -54,6 +54,7 @@ pnpm --filter @agent-tower/desktop package:linux
 This produces `packages/desktop/release/<platform>-<arch>/` and includes:
 
 - Electron desktop shell (`packages/desktop/dist`).
+- Node `22.19.0` or newer from the build environment, staged under `resources/runtime/node`.
 - Server runtime staged under `Contents/Resources/runtime/server` on macOS, or the equivalent `resources/runtime/server` directory on Windows/Linux.
 - Web static assets staged under `resources/runtime/web`.
 - Server production dependencies from `pnpm --filter @agent-tower/server deploy --legacy --prod`, including Prisma, generated Prisma client/engines, node-pty prebuilds, and cloudflared.
@@ -78,7 +79,7 @@ Isolated acceptance and smoke launches set `AGENT_TOWER_DESKTOP_STARTUP_TIMEOUT_
 
 Do not use `open packages/desktop/release/.../Agent Tower.app` for tests or acceptance runs. Directly opening the packaged app intentionally uses the production default data policy and can connect to the standard `~/.agent-tower` data directory. Only direct-open the app when explicitly validating the formal shared-data behavior.
 
-Packaged mode does not use a global `agent-tower` command. The desktop app starts `runtime/server/dist/cli.js` directly from app resources. Windows packages use the bundled `runtime/node/node.exe` for the backend and agent wrapper processes; other packaged platforms currently keep using Electron's executable as a Node-compatible runtime with `ELECTRON_RUN_AS_NODE=1`.
+Packaged mode does not use a global `agent-tower` command. On every platform the desktop app uses the bundled `runtime/node/node` or `node.exe` to start `runtime/server/dist/cli.js`; the same runtime starts the bundled Claude Code ACP, Codex ACP, and Pi dependencies.
 
 ## Integrated Titlebar
 
@@ -96,9 +97,8 @@ Copy the JSON from that screen into an MCP-capable client. The generated config 
 
 In packaged desktop mode, the config points at the bundled runtime:
 
-- `command`: the bundled runtime command. On Windows this is `resources/runtime/node/node.exe`; on other packaged platforms this is the packaged Electron app executable.
+- `command`: `resources/runtime/node/node.exe` on Windows or `resources/runtime/node/node` on macOS/Linux.
 - `args`: `resources/runtime/server/dist/mcp/index.js` inside the app resources.
-- `env.ELECTRON_RUN_AS_NODE`: `1` only when the command is the Electron app executable.
 - `env.AGENT_TOWER_DATA_DIR`: the data directory used by the current desktop backend, so the MCP process can discover the current backend port file.
 
 This means users do not need `npm i -g agent-tower` or a global `agent-tower-mcp` command for the packaged desktop MCP path.
@@ -177,7 +177,7 @@ The workflow sets `CSC_IDENTITY_AUTO_DISCOVERY=false`, so unsigned test packages
 
 ## Current Limits
 
-- Development `spike` still uses `node` from `PATH`; packaged `package:dir` uses a bundled Node runtime on Windows and Electron node-mode elsewhere, so it does not require global `agent-tower`.
+- Development `spike` still uses `node` from `PATH`; packaged `package:dir` uses its bundled Node runtime on every platform, so Claude Code ACP, Codex ACP, and Pi do not require global Agent CLIs.
 - Installer packages are generated, but signing/notarization is not configured yet.
 - Does not implement auto-update.
 - Does not add desktop-specific local API authentication yet.

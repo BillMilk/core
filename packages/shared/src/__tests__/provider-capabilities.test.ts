@@ -37,6 +37,11 @@ describe('provider capability matrix', () => {
     expect(PROVIDER_CAPABILITIES[AgentType.GEMINI_CLI].disableResponsesWebsocket).toBeUndefined()
     expect(PROVIDER_CAPABILITIES[AgentType.CURSOR_AGENT].disableResponsesWebsocket).toBeUndefined()
     expect(PROVIDER_CAPABILITIES[AgentType.QWEN_CODE].disableResponsesWebsocket).toBeUndefined()
+    expect(PROVIDER_CAPABILITIES[AgentType.KIRO_CLI].disableResponsesWebsocket).toBeUndefined()
+    expect(PROVIDER_CAPABILITIES[AgentType.OPENCODE].disableResponsesWebsocket).toBeUndefined()
+    expect(PROVIDER_CAPABILITIES[AgentType.PI_CODING_AGENT].disableResponsesWebsocket).toBeUndefined()
+    expect(PROVIDER_CAPABILITIES[AgentType.GROK_BUILD].disableResponsesWebsocket).toBeUndefined()
+    expect(PROVIDER_CAPABILITIES[AgentType.MINION_CODE].disableResponsesWebsocket).toBeUndefined()
   })
 
   it('declares ordered five-level effort options', () => {
@@ -44,6 +49,8 @@ describe('provider capability matrix', () => {
       .toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
     expect(PROVIDER_CAPABILITIES[AgentType.CODEX].reasoningEffort?.options)
       .toEqual(['minimal', 'low', 'medium', 'high', 'xhigh'])
+    expect(PROVIDER_CAPABILITIES[AgentType.KIRO_CLI].reasoningEffort?.options)
+      .toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
   })
 
   it('identifies only the Codex-reserved native and local model providers', () => {
@@ -89,5 +96,25 @@ describe('provider capability matrix', () => {
       apiKey: { kind: 'env', path: 'OPENAI_API_KEY' },
       model: { kind: 'config', path: 'model' },
     })
+  })
+
+  it('declares provider fields for every additional ACP agent', () => {
+    expect(getProviderCapability(AgentType.KIRO_CLI)).toMatchObject({
+      model: { path: 'model' },
+      reasoningEffort: { path: 'effort' },
+      executionPermission: { path: 'trustAllTools' },
+    })
+    for (const agentType of [
+      AgentType.OPENCODE,
+      AgentType.PI_CODING_AGENT,
+      AgentType.GROK_BUILD,
+      AgentType.MINION_CODE,
+    ]) {
+      expect(getProviderCapability(agentType)).toMatchObject({
+        apiBaseUrl: { kind: 'env', path: 'OPENAI_BASE_URL' },
+        apiKey: { kind: 'env', path: 'OPENAI_API_KEY' },
+        model: { kind: 'config', path: 'model' },
+      })
+    }
   })
 })

@@ -22,6 +22,7 @@ export interface AcpLaunchSpec {
   args: string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
+  cleanup?: () => Promise<void>;
 }
 
 export type AcpSessionBootstrapResponse = Pick<acp.NewSessionResponse, 'modes' | 'configOptions'>;

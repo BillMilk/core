@@ -129,6 +129,11 @@ describe('provider routes', () => {
       apiKey: { kind: 'env', path: 'OPENAI_API_KEY' },
       model: { kind: 'config', path: 'model' },
     });
+    expect(response.json()[AgentType.PI_CODING_AGENT]).toMatchObject({
+      apiBaseUrl: { kind: 'env', path: 'OPENAI_BASE_URL' },
+      apiKey: { kind: 'env', path: 'OPENAI_API_KEY' },
+      reasoningEffort: { kind: 'config', path: 'effort' },
+    });
     await app.close();
   });
 
@@ -233,15 +238,15 @@ describe('provider routes', () => {
     await app.close();
   });
 
-  it('rejects ACP runtime for unsupported Agent identities', async () => {
+  it('rejects unsupported Runtime choices and invalid ACP permission values', async () => {
     const app = await createApp();
     const response = await app.inject({
       method: 'POST',
       url: '/api/providers',
       payload: {
-        name: 'Gemini ACP',
-        agentType: AgentType.GEMINI_CLI,
-        runtimeType: RuntimeType.ACP,
+        name: 'Kiro CLI Runtime',
+        agentType: AgentType.KIRO_CLI,
+        runtimeType: RuntimeType.CLI,
       },
     });
 

@@ -9,21 +9,26 @@ description: 安装并启动 Agent Tower，并准备好一个可用的 agent CLI
 
 ## 前置条件
 
-- Node.js `>= 18`
+- Node.js `>= 22.19.0`
 - 本机已安装 Git
-- 至少安装一个你要使用的 agent 执行器
+- 至少准备一个可用的 Agent Provider；Claude Code ACP、Codex ACP 和 Pi Coding Agent 已随 Agent Tower 内置
 
 Agent Tower 本身不负责执行代码，它会通过 CLI Driver 或 ACP Driver 调用 Agent。多数 Runtime 仍需要本机可用的 Agent CLI；建议先准备好下面任意一个：
 
-| 执行器 | 可用 Runtime | 官方安装文档 |
+| 执行器 | 可用 Runtime | 安装说明 |
 | --- | --- | --- |
-| Claude Code | CLI、ACP | [Claude Code Setup](https://code.claude.com/docs/en/setup) |
-| Codex CLI | CLI、ACP | [Codex CLI](https://developers.openai.com/codex/cli) |
-| Cursor CLI | CLI | [Cursor CLI](https://cursor.com/cli) |
-| Gemini CLI | CLI | [Gemini CLI Get started](https://github.com/google-gemini/gemini-cli/blob/main/docs/get-started/index.md) |
+| Claude Code | CLI、ACP | ACP 已内置；CLI Runtime 见 [Claude Code Setup](https://code.claude.com/docs/en/setup) |
+| Codex CLI | CLI、ACP | ACP 已内置；CLI Runtime 见 [Codex CLI](https://developers.openai.com/codex/cli) |
+| Cursor CLI | CLI、ACP | [Cursor CLI](https://cursor.com/cli) |
+| Gemini CLI | CLI、ACP | [Gemini CLI Get started](https://github.com/google-gemini/gemini-cli/blob/main/docs/get-started/index.md) |
 | Qwen Code | ACP | [Qwen Code](https://github.com/QwenLM/qwen-code) |
+| Kiro CLI | ACP | [Kiro CLI](https://kiro.dev/docs/cli/) |
+| OpenCode | ACP | [OpenCode](https://opencode.ai/docs/) |
+| Pi Coding Agent | ACP | Agent Tower 内置，无需单独安装 |
+| Grok Build | ACP | 安装提供 `grok` 命令并支持 `grok agent stdio` 的版本 |
+| Minion Code | ACP | [Minion Code](https://github.com/femto/minion-code) |
 
-如果你已经能在终端里直接运行其中任意一个，就可以继续下一步。
+Claude Code ACP、Codex ACP 和 Pi Coding Agent 不要求全局安装对应 CLI；它们可以直接使用 Provider 中配置的凭证、API 地址和模型。Claude Code 与 Codex 的 CLI Runtime 仍要求本机 CLI。需要覆盖内置 ACP Runtime 时，可以分别使用 `CLAUDE_PATH`/`CLAUDE_CODE_EXECUTABLE`、`CODEX_PATH` 或 `PI_CODING_AGENT_PATH`/`PI_PATH`。
 
 ## 安装
 

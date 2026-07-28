@@ -31,6 +31,26 @@ export const AGENT_META_BY_TYPE: Record<AgentType, AgentMeta> = {
     agentType: AgentType.QWEN_CODE,
     label: 'Qwen Code',
   },
+  [AgentType.KIRO_CLI]: {
+    agentType: AgentType.KIRO_CLI,
+    label: 'Kiro CLI',
+  },
+  [AgentType.OPENCODE]: {
+    agentType: AgentType.OPENCODE,
+    label: 'OpenCode',
+  },
+  [AgentType.PI_CODING_AGENT]: {
+    agentType: AgentType.PI_CODING_AGENT,
+    label: 'Pi Coding Agent',
+  },
+  [AgentType.GROK_BUILD]: {
+    agentType: AgentType.GROK_BUILD,
+    label: 'Grok Build',
+  },
+  [AgentType.MINION_CODE]: {
+    agentType: AgentType.MINION_CODE,
+    label: 'Minion Code',
+  },
 }
 
 export function getAgentMeta(agentType?: AgentType | string | null): AgentMeta | null {

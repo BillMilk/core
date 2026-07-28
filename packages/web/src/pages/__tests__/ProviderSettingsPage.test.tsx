@@ -135,13 +135,20 @@ describe('ProviderFormModal draft test invalidation', () => {
     }))
   })
 
-  it('offers Claude Code and Qwen Code as ACP Agent choices', () => {
+  it('offers every ACP-only and dual-runtime Agent choice', () => {
     const onSave = vi.fn()
     renderModal(undefined, onSave)
 
     act(() => findButton('Claude Code').click())
     expect(findButton('Claude Code (ACP)')).not.toBeNull()
     expect(findButton('Qwen Code (ACP)')).not.toBeNull()
+    expect(findButton('Gemini CLI (ACP)')).not.toBeNull()
+    expect(findButton('Cursor Agent (ACP)')).not.toBeNull()
+    expect(findButton('Kiro CLI (ACP)')).not.toBeNull()
+    expect(findButton('OpenCode (ACP)')).not.toBeNull()
+    expect(findButton('Pi Coding Agent (ACP)')).not.toBeNull()
+    expect(findButton('Grok Build (ACP)')).not.toBeNull()
+    expect(findButton('Minion Code (ACP)')).not.toBeNull()
     expect([...document.querySelectorAll('button')].some(button => button.textContent?.trim() === 'Qwen Code')).toBe(false)
 
     act(() => findButton('Qwen Code (ACP)').click())

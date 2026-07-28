@@ -53,6 +53,8 @@ class AcpDriverSession implements DriverSession {
   private sessionReady = false;
   private sessionBootstrapUpdates?: SessionNotification[];
   private closed = false;
+  private launchCleanup?: () => Promise<void>;
+  private cleanupPromise?: Promise<void>;
   private negotiatedCapabilities: RuntimeCapabilities = {
     loadSession: false,
     terminalInput: false,
@@ -185,13 +187,18 @@ class AcpDriverSession implements DriverSession {
     this.connection = undefined;
     const manager = this.processManager;
     this.processManager = undefined;
-    await manager?.stop();
+    try {
+      await manager?.stop();
+    } finally {
+      await this.cleanupLaunch();
+    }
   }
 
   private projector?: AcpProjector;
 
   private async connect(sink: RuntimeDriverEventSink): Promise<void> {
     const launch = await this.definition.resolveLaunch(this.input, this.providerProfile);
+    this.launchCleanup = launch.cleanup;
     const manager = new AcpProcessManager({
       command: launch.command,
       args: launch.args,
@@ -199,8 +206,8 @@ class AcpDriverSession implements DriverSession {
       env: launch.env,
     });
     this.processManager = manager;
-    const streams = await manager.start();
     try {
+      const streams = await manager.start();
       await sink.process({ type: 'started', runtimeInstanceId: this.runtimeInstanceId, pid: streams.pid });
       manager.onExit((exit) => {
         void sink.process({
@@ -217,6 +224,7 @@ class AcpDriverSession implements DriverSession {
             true,
           ),
         );
+        void this.cleanupLaunch().catch(() => undefined);
       });
       const app = acp.client({ name: 'agent-tower' })
         .onNotification(acp.methods.client.session.update, async ({ params }) => {
@@ -261,8 +269,19 @@ class AcpDriverSession implements DriverSession {
       });
     } catch (error) {
       await manager.stop().catch(() => undefined);
+      this.processManager = undefined;
+      await this.cleanupLaunch().catch(() => undefined);
       throw normalizeAcpError(error, 'initialize');
     }
+  }
+
+  private cleanupLaunch(): Promise<void> {
+    if (!this.cleanupPromise) {
+      const cleanup = this.launchCleanup;
+      this.launchCleanup = undefined;
+      this.cleanupPromise = cleanup ? cleanup() : Promise.resolve();
+    }
+    return this.cleanupPromise;
   }
 
   private async ensureAgentSession(turn: RuntimeRunTurnInput, sink: RuntimeDriverEventSink): Promise<void> {

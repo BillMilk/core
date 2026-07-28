@@ -108,6 +108,26 @@ const AGENT_CONFIG_FIELDS: Record<string, ConfigFieldMeta[]> = {
   [AgentType.QWEN_CODE]: [
     APPEND_PROMPT_FIELD,
   ],
+  [AgentType.KIRO_CLI]: [
+    { key: 'trustAllTools', label: '信任所有工具', type: 'switch' },
+    APPEND_PROMPT_FIELD,
+  ],
+  [AgentType.OPENCODE]: [
+    { key: 'autoApprove', label: '自动批准操作', type: 'switch' },
+    APPEND_PROMPT_FIELD,
+  ],
+  [AgentType.PI_CODING_AGENT]: [
+    { key: 'autoApprove', label: '自动批准操作', type: 'switch' },
+    APPEND_PROMPT_FIELD,
+  ],
+  [AgentType.GROK_BUILD]: [
+    { key: 'alwaysApprove', label: '始终批准操作', type: 'switch' },
+    APPEND_PROMPT_FIELD,
+  ],
+  [AgentType.MINION_CODE]: [
+    { key: 'dangerouslySkipPermissions', label: '跳过权限确认', type: 'switch' },
+    APPEND_PROMPT_FIELD,
+  ],
 }
 
 function getDefaultConfigForAgentType(): Record<string, unknown> {

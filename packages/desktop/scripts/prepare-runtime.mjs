@@ -1,4 +1,14 @@
-import { rmSync, mkdirSync, cpSync, existsSync, readdirSync, chmodSync, realpathSync, lstatSync } from 'node:fs';
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+} from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -31,11 +41,10 @@ function requirePath(target, label) {
   }
 }
 
-function assertNoRuntimeSymlinks(target, root = target) {
+function assertNoRuntimeSymlinks(target) {
   for (const entry of readdirSync(target, { withFileTypes: true })) {
     const entryPath = path.join(target, entry.name);
-    const relative = path.relative(root, entryPath);
-    if (relative.startsWith(`.bin${path.sep}`)) {
+    if (entry.name === '.bin' && entry.isDirectory()) {
       continue;
     }
 
@@ -44,7 +53,7 @@ function assertNoRuntimeSymlinks(target, root = target) {
       throw new Error(`Desktop runtime must not contain dependency symlinks: ${path.relative(monorepoRoot, entryPath)}`);
     }
     if (entry.isDirectory()) {
-      assertNoRuntimeSymlinks(entryPath, root);
+      assertNoRuntimeSymlinks(entryPath);
     }
   }
 }
@@ -52,13 +61,15 @@ function assertNoRuntimeSymlinks(target, root = target) {
 rmSync(runtimeDir, { recursive: true, force: true });
 mkdirSync(runtimeDir, { recursive: true });
 
-if (process.platform === 'win32') {
-  mkdirSync(nodeRuntimeDir, { recursive: true });
-  cpSync(process.execPath, path.join(nodeRuntimeDir, 'node.exe'), {
-    dereference: true,
-  });
-  requirePath(path.join(nodeRuntimeDir, 'node.exe'), 'Windows Node runtime');
+const nodeRuntimePath = path.join(nodeRuntimeDir, process.platform === 'win32' ? 'node.exe' : 'node');
+mkdirSync(nodeRuntimeDir, { recursive: true });
+cpSync(process.execPath, nodeRuntimePath, {
+  dereference: true,
+});
+if (process.platform !== 'win32') {
+  chmodSync(nodeRuntimePath, 0o755);
 }
+requirePath(nodeRuntimePath, 'Node runtime');
 
 run('pnpm', ['--filter', '@agent-tower/server', '--config.node-linker=hoisted', 'deploy', '--legacy', '--prod', serverRuntimeDir]);
 
@@ -77,6 +88,18 @@ requirePath(path.join(serverRuntimeDir, 'node_modules/@modelcontextprotocol/sdk'
 requirePath(path.join(serverRuntimeDir, 'node_modules/@agentclientprotocol/sdk'), 'ACP SDK runtime');
 requirePath(path.join(serverRuntimeDir, 'node_modules/@agentclientprotocol/codex-acp'), 'Codex ACP adapter runtime');
 requirePath(path.join(serverRuntimeDir, 'node_modules/@agentclientprotocol/claude-agent-acp'), 'Claude Code ACP adapter runtime');
+requirePath(path.join(serverRuntimeDir, 'node_modules/pi-acp/dist/index.js'), 'Pi ACP adapter runtime');
+requirePath(path.join(serverRuntimeDir, 'node_modules/pi-mcp-adapter/package.json'), 'Pi MCP adapter runtime');
+const piPackagePath = path.join(serverRuntimeDir, 'node_modules/@earendil-works/pi-coding-agent/package.json');
+requirePath(piPackagePath, 'Pi runtime');
+const piPackage = JSON.parse(readFileSync(piPackagePath, 'utf-8'));
+if (piPackage.version !== '0.82.1') {
+  throw new Error(`Unexpected Pi version ${piPackage.version}`);
+}
+requirePath(
+  path.join(serverRuntimeDir, 'node_modules/.bin', process.platform === 'win32' ? 'pi.cmd' : 'pi'),
+  'Pi executable',
+);
 await patchClaudeAgentAcp({ moduleRoot: serverRuntimeDir });
 assertNoRuntimeSymlinks(path.join(serverRuntimeDir, 'node_modules'));
 
@@ -101,7 +124,7 @@ if (prismaEngineFiles.length === 0) {
   throw new Error(`Generated Prisma client has no query engine files: ${generatedPrismaClientDest}`);
 }
 
-const runtimeCheck = spawnSync(process.execPath, [
+const runtimeCheck = spawnSync(nodeRuntimePath, [
   '--input-type=module',
   '-e',
   [
@@ -117,7 +140,21 @@ const runtimeCheck = spawnSync(process.execPath, [
     "await import('@agentclientprotocol/sdk')",
     "require.resolve('@agentclientprotocol/codex-acp')",
     "require.resolve('@agentclientprotocol/claude-agent-acp/dist/index.js')",
-    "await import('./dist/runtime/acp/agents/executable-resolution.js').then((module) => { if (!module.resolveBundledClaudeExecutable()) throw new Error('Bundled Claude executable was not resolved') })",
+    "require.resolve('pi-acp')",
+    "require.resolve('pi-mcp-adapter/package.json')",
+    "const [major, minor] = process.versions.node.split('.').map(Number); if (major < 22 || (major === 22 && minor < 19)) throw new Error(`Bundled Node ${process.versions.node} is older than 22.19.0`)",
+    "await import('@earendil-works/pi-coding-agent')",
+    "const bundledExecutables = await import('./dist/runtime/acp/agents/executable-resolution.js')",
+    "const claudeExecutable = bundledExecutables.resolveBundledClaudeExecutable()",
+    "if (!claudeExecutable) throw new Error('Bundled Claude executable was not resolved')",
+    "const codexEntrypoint = bundledExecutables.resolveBundledCodexEntrypoint()",
+    "if (!codexEntrypoint) throw new Error('Bundled Codex entrypoint was not resolved')",
+    "if (!bundledExecutables.resolveBundledPiExecutable()) throw new Error('Bundled Pi executable was not resolved')",
+    "const { spawnSync: verifySpawnSync } = await import('node:child_process')",
+    "const claudeVersion = verifySpawnSync(claudeExecutable, ['--version'], { encoding: 'utf-8', env: process.env })",
+    "if (claudeVersion.status !== 0) throw new Error(`Bundled Claude executable failed: ${claudeVersion.error?.message ?? claudeVersion.stderr}`)",
+    "const codexVersion = verifySpawnSync(process.execPath, [codexEntrypoint, '--version'], { encoding: 'utf-8', env: process.env })",
+    "if (codexVersion.status !== 0) throw new Error(`Bundled Codex entrypoint failed: ${codexVersion.error?.message ?? codexVersion.stderr}`)",
     "await import('./dist/mcp/server.js')",
   ].join(';'),
 ], {

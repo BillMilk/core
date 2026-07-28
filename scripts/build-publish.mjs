@@ -166,7 +166,7 @@ const publishPkg = {
   },
   bundledDependencies: ['@agent-tower/shared', '@shitiandmw/node-pty', 'cloudflared'],
   engines: {
-    node: '>=18.0.0',
+    node: '>=22.19.0',
   },
 };
 

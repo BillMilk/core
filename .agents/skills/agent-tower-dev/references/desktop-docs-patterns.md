@@ -7,7 +7,7 @@
 保持这些边界：
 
 - packaged 默认 shared data，开发壳默认 isolated；测试使用独立 user data/data dir。
-- packaged runtime 使用 bundled Node、server、web 和 MCP，不依赖全局 CLI。
+- packaged runtime 在所有平台复制并使用构建环境中满足仓库最低版本的 bundled Node，同时携带 server、web 和 MCP；不要回退到 Electron 内嵌 Node，也不依赖全局 CLI。
 - 后端只绑定 loopback，窗口只加载预期本地 origin。
 - startup failure、early exit 和正常退出都有清理；日志使用 `log-redaction.ts`。
 - 路径、process kill 和 executable 选择兼容 Windows/macOS/Linux。

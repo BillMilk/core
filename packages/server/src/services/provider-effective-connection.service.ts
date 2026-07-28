@@ -11,6 +11,7 @@ import { isAgentSubprocessProtectedEnvKey } from '../executors/execution-env.js'
 
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 export const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
+export const DEFAULT_XAI_BASE_URL = 'https://api.x.ai/v1';
 export const CODEX_OPENAI_COMPATIBLE_PROVIDER_ID = 'agent-tower-openai-compatible';
 export const CODEX_OPENAI_COMPATIBLE_PROVIDER_NAME = 'Agent Tower OpenAI Compatible';
 export const CODEX_OPENAI_COMPATIBLE_ENV_KEY = 'AGENT_TOWER_CODEX_PROVIDER_KEY';
@@ -255,8 +256,18 @@ export function resolveEffectiveProviderConnection(
     };
   }
 
-  if (provider.agentType === AgentType.QWEN_CODE) {
-    const baseUrl = provider.env.OPENAI_BASE_URL?.trim() || undefined;
+  if (
+    provider.agentType === AgentType.QWEN_CODE
+    || provider.agentType === AgentType.OPENCODE
+    || provider.agentType === AgentType.PI_CODING_AGENT
+    || provider.agentType === AgentType.GROK_BUILD
+    || provider.agentType === AgentType.MINION_CODE
+  ) {
+    const secret = provider.env.OPENAI_API_KEY;
+    const defaultBaseUrl = provider.agentType === AgentType.GROK_BUILD
+      ? DEFAULT_XAI_BASE_URL
+      : DEFAULT_OPENAI_BASE_URL;
+    const baseUrl = provider.env.OPENAI_BASE_URL?.trim() || (secret ? defaultBaseUrl : undefined);
     return {
       agentType: provider.agentType,
       protocol: baseUrl ? 'openai-compatible' : null,
@@ -264,7 +275,7 @@ export function resolveEffectiveProviderConnection(
       baseUrl,
       envKey: 'OPENAI_API_KEY',
       credentialEnvKey: 'OPENAI_API_KEY',
-      secret: provider.env.OPENAI_API_KEY,
+      secret,
       source: 'provider-env',
       legacyBaseUrl: false,
       diagnostics: validateHttpBaseUrl(baseUrl),

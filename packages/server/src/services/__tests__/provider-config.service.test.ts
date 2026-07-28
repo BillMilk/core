@@ -126,6 +126,32 @@ describe('provider config mapper', () => {
     });
   });
 
+  it.each([
+    [AgentType.QWEN_CODE, 'https://api.openai.com/v1'],
+    [AgentType.OPENCODE, 'https://api.openai.com/v1'],
+    [AgentType.PI_CODING_AGENT, 'https://api.openai.com/v1'],
+    [AgentType.GROK_BUILD, 'https://api.x.ai/v1'],
+    [AgentType.MINION_CODE, 'https://api.openai.com/v1'],
+  ])('resolves the default OpenAI-compatible connection for %s', (agentType, baseUrl) => {
+    const connection = resolveEffectiveProviderConnection({
+      agentType,
+      env: { OPENAI_API_KEY: 'compatible-provider-sentinel' },
+      settings: undefined,
+    });
+
+    expect(connection).toMatchObject({
+      agentType,
+      protocol: 'openai-compatible',
+      providerKind: 'direct',
+      baseUrl,
+      envKey: 'OPENAI_API_KEY',
+      credentialEnvKey: 'OPENAI_API_KEY',
+      source: 'provider-env',
+      diagnostics: [],
+    });
+    expect(connection.secret).toBe('compatible-provider-sentinel');
+  });
+
   it.each(protectedSubprocessEnvKeys)(
     'rejects protected subprocess env_key %s before normalization or probe',
     async envKey => {
@@ -497,6 +523,11 @@ describe('provider config mapper', () => {
     [AgentType.GEMINI_CLI, 'yolo'],
     [AgentType.CURSOR_AGENT, 'force'],
     [AgentType.CODEX, 'dangerouslyBypassApprovalsAndSandbox'],
+    [AgentType.KIRO_CLI, 'trustAllTools'],
+    [AgentType.OPENCODE, 'autoApprove'],
+    [AgentType.PI_CODING_AGENT, 'autoApprove'],
+    [AgentType.GROK_BUILD, 'alwaysApprove'],
+    [AgentType.MINION_CODE, 'dangerouslySkipPermissions'],
   ])('requires a boolean execution permission for %s', (agentType, path) => {
     for (const invalidValue of ['true', 1, null, {}]) {
       const invalid = normalizeProviderDraft({

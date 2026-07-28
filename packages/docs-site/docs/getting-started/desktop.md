@@ -65,7 +65,7 @@ pnpm desktop:package:acceptance
 | `isolated` | 开发运行默认值，后端数据放在 Electron `userData` 下，避免污染正式 CLI 数据 |
 | `shared` | 打包桌面端默认值，复用标准 Agent Tower 数据目录，通常是 `~/.agent-tower` |
 
-生产桌面包默认不会依赖全局 `agent-tower` 命令。打包产物会从 app resources 中启动后端 runtime。
+生产桌面包默认不会依赖全局 `agent-tower` 命令。打包产物会从 app resources 中启动后端 runtime，并携带 Claude Code ACP、Codex ACP 和 Pi Coding Agent 所需的 Runtime。
 
 ## MCP 配置
 

@@ -37,6 +37,11 @@ export enum AgentType {
   CURSOR_AGENT = 'CURSOR_AGENT',
   CODEX = 'CODEX',
   QWEN_CODE = 'QWEN_CODE',
+  KIRO_CLI = 'KIRO_CLI',
+  OPENCODE = 'OPENCODE',
+  PI_CODING_AGENT = 'PI_CODING_AGENT',
+  GROK_BUILD = 'GROK_BUILD',
+  MINION_CODE = 'MINION_CODE',
 }
 
 /** Agent 执行协议。AgentType 表示身份，RuntimeType 表示运行方式。 */

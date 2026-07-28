@@ -48,7 +48,7 @@ BaseExecutor -> PTY -> AgentPipeline -> Parser -> MsgStore -> EventBus
               └─────────┬─────────┘   └──────────┬─────────────┘
                         │              ┌──────────▼─────────────┐
                         │              │ ACP Agent Registry     │
-                        │              │ Codex / Claude / Qwen  │
+                        │              │ 10 Agent Definitions   │
                         │              │ launch + config policy │
                         │              └──────────┬─────────────┘
                         └───────────┬─────────────┘
@@ -61,17 +61,24 @@ BaseExecutor -> PTY -> AgentPipeline -> Parser -> MsgStore -> EventBus
 
 `AgentType` 表示 Codex、Claude Code 等 Agent 身份；`RuntimeType` 表示 `CLI` 或 `ACP` 执行协议。Provider 同时选择二者，创建 Session 时会固化 Runtime，已有 Session 不会因为后来修改 Provider 而静默切换协议。
 
-ACP Driver 本身不包含 Codex、Claude Code 或 Qwen Code 的专属启动逻辑。它只管理协议连接和通用生命周期，并从 `AcpAgentRegistry` 取得对应 Agent Definition。Definition 负责 Provider 投影、可执行文件解析、adapter/原生 ACP 启动、Session metadata、模型和权限模式配置。新增 ACP Agent 时通常只增加 Definition 和 Provider 能力，不复制 RuntimeCoordinator 或 ACP Driver。
+ACP Driver 本身不包含具体 Agent 的专属启动逻辑。它只管理协议连接、通用生命周期和临时启动资源清理，并从 `AcpAgentRegistry` 取得对应 Agent Definition。Definition 负责 Provider 投影、可执行文件解析、adapter/原生 ACP 启动、Session metadata、模型和权限模式配置。新增 ACP Agent 时通常只增加 Definition 和 Provider 能力，不复制 RuntimeCoordinator 或 ACP Driver。
 
 当前 Runtime 支持矩阵：
 
 | Agent | CLI | ACP |
 | --- | --- | --- |
 | Claude Code | 是 | 是 |
-| Gemini CLI | 是 | 否 |
-| Cursor Agent | 是 | 否 |
+| Gemini CLI | 是 | 是 |
+| Cursor Agent | 是 | 是 |
 | Codex | 是 | 是 |
 | Qwen Code | 否 | 是 |
+| Kiro CLI | 否 | 是 |
+| OpenCode | 否 | 是 |
+| Pi Coding Agent | 否 | 是 |
+| Grok Build | 否 | 是 |
+| Minion Code | 否 | 是 |
+
+Claude Code 与 Codex 通过随 Agent Tower 发布的 ACP adapter 及其兼容 Runtime 启动，不依赖全局 CLI。Gemini CLI、Cursor Agent、Kiro CLI、OpenCode、Grok Build 和 Minion Code 直接启动各自的原生 ACP 子命令。Pi Coding Agent 通过 `pi-acp` 启动，并在会话级隔离目录中加载 `pi-mcp-adapter`；Minion Code 通过会话级 Python bridge 接入 ACP 下发的 MCP server。Pi 与 Minion 都不会修改用户的全局 settings/MCP 配置，临时目录会在启动失败、进程退出或 Session 关闭时删除。
 
 ## 技术栈
 
