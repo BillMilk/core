@@ -26,7 +26,6 @@ Agent Tower 本身不负责执行代码，它会通过 CLI Driver 或 ACP Driver
 | OpenCode | ACP | [OpenCode](https://opencode.ai/docs/) |
 | Pi Coding Agent | ACP | Agent Tower 内置，无需单独安装 |
 | Grok Build | ACP | 安装提供 `grok` 命令并支持 `grok agent stdio` 的版本 |
-| Minion Code | ACP | [Minion Code](https://github.com/femto/minion-code) |
 
 Claude Code ACP、Codex ACP 和 Pi Coding Agent 不要求全局安装对应 CLI；它们可以直接使用 Provider 中配置的凭证、API 地址和模型。Claude Code 与 Codex 的 CLI Runtime 仍要求本机 CLI。需要覆盖内置 ACP Runtime 时，可以分别使用 `CLAUDE_PATH`/`CLAUDE_CODE_EXECUTABLE`、`CODEX_PATH` 或 `PI_CODING_AGENT_PATH`/`PI_PATH`。
 

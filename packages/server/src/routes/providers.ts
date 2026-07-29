@@ -4,6 +4,8 @@ import {
   AgentType as SharedAgentType,
   PROVIDER_CAPABILITIES,
   RuntimeType,
+  USER_VISIBLE_AGENT_TYPES,
+  isUserVisibleAgentType,
   type ProviderDraftInput,
 } from '@agent-tower/shared';
 import {
@@ -59,7 +61,7 @@ const conflictResolutionsSchema = z.record(
 
 const createProviderSchema = z.object({
   name: z.string(),
-  agentType: z.nativeEnum(AgentType),
+  agentType: z.nativeEnum(AgentType).refine(isUserVisibleAgentType, 'Agent type is not available'),
   runtimeType: z.nativeEnum(RuntimeType).default(RuntimeType.CLI),
   env: z.record(secretWriteSchema).default({}),
   config: z.record(z.unknown()).default({}),
@@ -147,7 +149,9 @@ export async function providerRoutes(app: FastifyInstance, options: ProviderRout
     }));
   });
 
-  app.get('/providers/capabilities', async () => PROVIDER_CAPABILITIES);
+  app.get('/providers/capabilities', async () => Object.fromEntries(
+    USER_VISIBLE_AGENT_TYPES.map(agentType => [agentType, PROVIDER_CAPABILITIES[agentType]]),
+  ));
 
   app.post('/providers/test', async (request, reply) => {
     const parsed = testProviderSchema.safeParse(request.body);
@@ -241,7 +245,12 @@ export async function providerRoutes(app: FastifyInstance, options: ProviderRout
         return { message: 'Invalid provider backup', diagnostics };
       }
       const result = importProvidersFromBackup(backup);
-      return { ...result, providers: result.providers.map(provider => redactProvider(provider)) };
+      return {
+        ...result,
+        providers: result.providers
+          .filter(provider => isUserVisibleAgentType(provider.agentType))
+          .map(provider => redactProvider(provider)),
+      };
     } catch (error) {
       reply.code(400);
       return { message: redactError(error) };
@@ -326,6 +335,8 @@ export async function providerRoutes(app: FastifyInstance, options: ProviderRout
 
   app.post('/providers/reload', async () => ({
     success: true,
-    providers: reloadProviders().map(provider => redactProvider(provider)),
+    providers: reloadProviders()
+      .filter(provider => isUserVisibleAgentType(provider.agentType))
+      .map(provider => redactProvider(provider)),
   }));
 }

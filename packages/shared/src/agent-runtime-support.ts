@@ -19,6 +19,16 @@ export const AGENT_RUNTIME_SUPPORT: AgentRuntimeSupportMatrix = {
   [AgentType.MINION_CODE]: [RuntimeType.ACP],
 }
 
+export const USER_VISIBLE_AGENT_TYPES: readonly AgentType[] = Object.freeze(
+  Object.values(AgentType).filter(agentType => agentType !== AgentType.MINION_CODE),
+)
+
+const USER_VISIBLE_AGENT_TYPE_SET = new Set<string>(USER_VISIBLE_AGENT_TYPES)
+
+export function isUserVisibleAgentType(agentType: AgentType | string): boolean {
+  return USER_VISIBLE_AGENT_TYPE_SET.has(agentType)
+}
+
 export function supportsAgentRuntime(
   agentType: AgentType | string,
   runtimeType: RuntimeType | string,

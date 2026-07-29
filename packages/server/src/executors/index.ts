@@ -19,7 +19,7 @@ import {
   type Provider,
 } from './providers.js';
 import { resolveEffectiveProviderConnection } from '../services/provider-effective-connection.service.js';
-import { RuntimeType } from '@agent-tower/shared';
+import { isUserVisibleAgentType, RuntimeType } from '@agent-tower/shared';
 
 // ─── Executor Factory ────────────────────────────────────────────
 
@@ -243,7 +243,7 @@ export async function getAllProvidersAvailability(): Promise<
     availability: AvailabilityInfo;
   }>
 > {
-  const providers = getAllProviders();
+  const providers = getAllProviders().filter(provider => isUserVisibleAgentType(provider.agentType));
   const results: Array<{ provider: Provider; availability: AvailabilityInfo }> = [];
 
   // Runtime dependency checks differ even for the same AgentType.

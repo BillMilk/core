@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { RuntimeType } from '@agent-tower/shared';
 import { AgentType } from '../../types/index.js';
 import { getAllProvidersAvailability } from '../index.js';
-import { reloadProviders } from '../providers.js';
+import { getProviderById, reloadProviders } from '../providers.js';
 
 const whichMock = vi.hoisted(() => vi.fn<(command: string) => Promise<string | null>>());
 
@@ -151,5 +151,25 @@ describe('provider availability', () => {
       error: 'Qwen Code CLI was not found',
     });
     expect(byId.get('qwen-code-acp-custom')).toEqual({ type: 'INSTALLATION_FOUND' });
+  });
+
+  it('hides compatibility-only providers while preserving direct lookup', async () => {
+    writeUserProviders([
+      {
+        id: 'minion-code-legacy',
+        name: 'Minion Code Legacy',
+        agentType: AgentType.MINION_CODE,
+        runtimeType: RuntimeType.ACP,
+        env: {},
+        config: {},
+        isDefault: true,
+      },
+    ]);
+    reloadProviders();
+
+    const results = await getAllProvidersAvailability();
+
+    expect(results.some(item => item.provider.agentType === AgentType.MINION_CODE)).toBe(false);
+    expect(getProviderById('minion-code-legacy')).not.toBeNull();
   });
 });

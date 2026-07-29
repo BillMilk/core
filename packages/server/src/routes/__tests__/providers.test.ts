@@ -134,6 +134,24 @@ describe('provider routes', () => {
       apiKey: { kind: 'env', path: 'OPENAI_API_KEY' },
       reasoningEffort: { kind: 'config', path: 'effort' },
     });
+    expect(response.json()[AgentType.MINION_CODE]).toBeUndefined();
+    await app.close();
+  });
+
+  it('rejects creating a hidden Minion Code provider', async () => {
+    const app = await createApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/providers',
+      payload: {
+        name: 'Minion Code Hidden',
+        agentType: AgentType.MINION_CODE,
+        runtimeType: RuntimeType.ACP,
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: 'Invalid provider configuration' });
     await app.close();
   });
 

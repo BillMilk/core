@@ -47,7 +47,7 @@ export function useProvider(id: string) {
 export function useProviderCapabilities() {
   return useQuery({
     queryKey: queryKeys.providers.capabilities,
-    queryFn: () => apiClient.get<ProviderCapabilityMatrix>('/providers/capabilities'),
+    queryFn: () => apiClient.get<Partial<ProviderCapabilityMatrix>>('/providers/capabilities'),
     staleTime: Infinity,
   })
 }

@@ -135,7 +135,7 @@ describe('ProviderFormModal draft test invalidation', () => {
     }))
   })
 
-  it('offers every ACP-only and dual-runtime Agent choice', () => {
+  it('offers every user-visible ACP-only and dual-runtime Agent choice', () => {
     const onSave = vi.fn()
     renderModal(undefined, onSave)
 
@@ -148,7 +148,9 @@ describe('ProviderFormModal draft test invalidation', () => {
     expect(findButton('OpenCode (ACP)')).not.toBeNull()
     expect(findButton('Pi Coding Agent (ACP)')).not.toBeNull()
     expect(findButton('Grok Build (ACP)')).not.toBeNull()
-    expect(findButton('Minion Code (ACP)')).not.toBeNull()
+    expect([...document.querySelectorAll('button')].some(
+      button => button.textContent?.trim() === 'Minion Code (ACP)'
+    )).toBe(false)
     expect([...document.querySelectorAll('button')].some(button => button.textContent?.trim() === 'Qwen Code')).toBe(false)
 
     act(() => findButton('Qwen Code (ACP)').click())

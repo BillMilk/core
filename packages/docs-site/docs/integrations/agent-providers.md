@@ -20,7 +20,6 @@ Provider 是 agent 的具体配置实例。它决定某个任务使用哪种 Age
 - OpenCode（ACP）
 - Pi Coding Agent（ACP）
 - Grok Build（ACP）
-- Minion Code（ACP）
 
 ## Runtime
 
@@ -29,7 +28,7 @@ Provider 的 `runtimeType` 有两种选择：
 | Runtime | 行为 | 当前 Agent 支持 |
 | --- | --- | --- |
 | `CLI` | 启动本机 CLI，通过 PTY、Parser 和 MsgStore 处理输出 | Claude Code、Gemini CLI、Cursor Agent、Codex |
-| `ACP` | 通过 Agent Client Protocol 双向通信，支持能力协商、session 恢复和权限请求 | Claude Code、Gemini CLI、Cursor Agent、Codex、Qwen Code、Kiro CLI、OpenCode、Pi Coding Agent、Grok Build、Minion Code |
+| `ACP` | 通过 Agent Client Protocol 双向通信，支持能力协商、session 恢复和权限请求 | Claude Code、Gemini CLI、Cursor Agent、Codex、Qwen Code、Kiro CLI、OpenCode、Pi Coding Agent、Grok Build |
 
 旧 Provider 和旧备份没有 `runtimeType` 时按 `CLI` 读取，因此升级不会改变已有配置。同一 Agent 的 CLI 与 ACP 是两个独立默认项；设置其中一个不会取消另一个的默认状态。
 
@@ -53,13 +52,12 @@ ACP Provider 沿用对应 Agent 的认证与模型配置，而不是使用一套
 | OpenCode (ACP) | OpenCode 登录状态，或 `OPENAI_API_KEY`、`OPENAI_BASE_URL` 和模型 |
 | Pi Coding Agent (ACP) | 内置 Pi Runtime；配置 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、模型和思考强度，或 Pi 支持的环境变量认证 |
 | Grok Build (ACP) | `OPENAI_API_KEY` 会映射为 `XAI_API_KEY`，并支持 API 地址、模型和权限策略 |
-| Minion Code (ACP) | `OPENAI_API_KEY`、`OPENAI_BASE_URL`、模型和权限策略 |
 
 启动时，通用 ACP Driver 会按 Agent Definition 将 Provider 配置投影为对应 adapter 或原生 ACP CLI 的启动参数、环境变量和 Session 配置。
 
 Claude Code 与 Codex 的 ACP adapter 及其兼容 Runtime 随 Agent Tower 发布，默认不要求全局安装 `claude` 或 `codex`；可以分别通过 `CLAUDE_PATH`/`CLAUDE_CODE_EXECUTABLE` 和 `CODEX_PATH` 显式覆盖。Pi Coding Agent 的 npm Runtime 同样随 Agent Tower 发布，可以通过 `PI_CODING_AGENT_PATH` 或 `PI_PATH` 覆盖。
 
-每个 Pi 会话使用隔离的 `PI_CODING_AGENT_DIR`；Agent Tower 会在其中生成 `settings.json`、`mcp.json` 和需要时的 `models.json`，通过 Pi settings 加载随 Agent Tower 发布的 `pi-mcp-adapter`。Minion Code 使用会话级 `PYTHONPATH` bridge，把 ACP Session 下发的 MCP server 转成 Minion 工具。两个方案都不会改写用户或项目的 settings/MCP 配置；受管目录权限为 `0700`、文件权限为 `0600`，并在进程结束后清理。`pi-acp` 仍会按上游约定在 `~/.pi/pi-acp` 维护 ACP session 映射，供 session 恢复使用。
+每个 Pi 会话使用隔离的 `PI_CODING_AGENT_DIR`；Agent Tower 会在其中生成 `settings.json`、`mcp.json` 和需要时的 `models.json`，通过 Pi settings 加载随 Agent Tower 发布的 `pi-mcp-adapter`。这个方案不会改写用户或项目的 settings/MCP 配置；受管目录权限为 `0700`、文件权限为 `0600`，并在进程结束后清理。`pi-acp` 仍会按上游约定在 `~/.pi/pi-acp` 维护 ACP session 映射，供 session 恢复使用。
 
 ## 为什么要按任务选择 Provider
 
@@ -97,7 +95,7 @@ Provider 页面支持：
 - 从备份导入
 - 重新加载配置
 
-Agent 环境页面支持检测和引导安装部分本机 Agent CLI。安装前会展示官方来源、下载摘要、风险提示和校验信息。Claude Code 与 Codex 的安装入口面向 CLI Runtime；它们的 ACP Runtime 已内置。Qwen Code、Kiro CLI、OpenCode、Grok Build 和 Minion Code 当前不在安装清单中，需要用户自行安装对应 CLI；Pi Coding Agent 已内置，Provider 可用性会直接检测随 Agent Tower 发布的 Runtime。
+Agent 环境页面支持检测和引导安装部分本机 Agent CLI。安装前会展示官方来源、下载摘要、风险提示和校验信息。Claude Code 与 Codex 的安装入口面向 CLI Runtime；它们的 ACP Runtime 已内置。Qwen Code、Kiro CLI、OpenCode 和 Grok Build 当前不在安装清单中，需要用户自行安装对应 CLI；Pi Coding Agent 已内置，Provider 可用性会直接检测随 Agent Tower 发布的 Runtime。
 
 当前环境引导支持：
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { AGENT_RUNTIME_SUPPORT, supportsAgentRuntime } from '../agent-runtime-support.js'
+import {
+  AGENT_RUNTIME_SUPPORT,
+  USER_VISIBLE_AGENT_TYPES,
+  isUserVisibleAgentType,
+  supportsAgentRuntime,
+} from '../agent-runtime-support.js'
 import { AgentType, RuntimeType } from '../types.js'
 
 describe('Agent Runtime support catalog', () => {
@@ -21,5 +26,12 @@ describe('Agent Runtime support catalog', () => {
     expect(supportsAgentRuntime(AgentType.GEMINI_CLI, RuntimeType.ACP)).toBe(true)
     expect(supportsAgentRuntime(AgentType.CURSOR_AGENT, RuntimeType.ACP)).toBe(true)
     expect(supportsAgentRuntime(AgentType.PI_CODING_AGENT, RuntimeType.CLI)).toBe(false)
+  })
+
+  it('keeps compatibility-only Agents out of user-facing choices', () => {
+    expect(USER_VISIBLE_AGENT_TYPES).not.toContain(AgentType.MINION_CODE)
+    expect(isUserVisibleAgentType(AgentType.MINION_CODE)).toBe(false)
+    expect(isUserVisibleAgentType('UNKNOWN')).toBe(false)
+    expect(supportsAgentRuntime(AgentType.MINION_CODE, RuntimeType.ACP)).toBe(true)
   })
 })

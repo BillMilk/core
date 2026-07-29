@@ -25,6 +25,7 @@ import {
   AGENT_RUNTIME_SUPPORT,
   PROVIDER_CAPABILITIES,
   RuntimeType,
+  USER_VISIBLE_AGENT_TYPES,
   type AppLocale,
   type ProviderBackupFile,
   type ProviderDraftInput,
@@ -738,7 +739,7 @@ export function ProviderFormModal({
               <Select
                 value={getProviderAgentOption(formData.agentType, formData.runtimeType)}
                 onChange={handleAgentTypeChange}
-                options={Object.values(AgentType).flatMap(agentType => (
+                options={USER_VISIBLE_AGENT_TYPES.flatMap(agentType => (
                   AGENT_RUNTIME_SUPPORT[agentType].map(runtimeType => ({
                     value: getProviderAgentOption(agentType, runtimeType),
                     label: getProviderAgentLabel(agentType, runtimeType),
