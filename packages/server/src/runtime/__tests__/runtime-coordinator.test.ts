@@ -122,6 +122,26 @@ describe('RuntimeCoordinator', () => {
     await coordinator.destroyAll();
   });
 
+  it('forwards the requested resume mode to the driver turn', async () => {
+    const { coordinator, input, session, turns } = setup();
+    const handle = await coordinator.startTurn({
+      ...input,
+      resumeExternalSessionId: 'external-1',
+      resumeMode: 'resume',
+    });
+
+    expect(vi.mocked(session.runTurn)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resumeExternalSessionId: 'external-1',
+        resumeMode: 'resume',
+      }),
+      expect.anything(),
+    );
+    turns[0].resolve({});
+    await handle.completion;
+    await coordinator.destroyAll();
+  });
+
   it('cancels an abandoned turn, suppresses its terminal event, and reuses the driver session', async () => {
     const { coordinator, input, session, turns, sinks, events } = setup();
     const first = await coordinator.startTurn(input);

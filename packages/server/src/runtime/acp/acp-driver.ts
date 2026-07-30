@@ -60,6 +60,7 @@ class AcpDriverSession implements DriverSession {
     terminalResize: false,
     permissions: true,
   };
+  private supportsSessionResume = false;
   private readonly pendingPermissions = new Map<string, PendingPermission>();
   private readonly cancelledTurnIds = new Set<string>();
   readonly runtimeInstanceId = randomUUID();
@@ -266,6 +267,7 @@ class AcpDriverSession implements DriverSession {
         terminalResize: false,
         permissions: true,
       };
+      this.supportsSessionResume = response.agentCapabilities?.sessionCapabilities?.resume != null;
       void connection.closed.then(() => {
         if (!this.closed && this.currentTurnId) {
           this.invalidatePermissions(this.currentSink);
@@ -297,18 +299,28 @@ class AcpDriverSession implements DriverSession {
     const sessionMetadata = this.definition.sessionMetadata?.(this.providerProfile) ?? {};
     const bootstrapUpdates: SessionNotification[] = [];
     this.sessionBootstrapUpdates = bootstrapUpdates;
-    const isLoading = Boolean(requestedExternalId);
+    const resumeMode = turn.resumeMode ?? 'load';
+    const shouldResumeWithoutHistory = Boolean(requestedExternalId)
+      && resumeMode === 'resume'
+      && this.supportsSessionResume;
     try {
       if (requestedExternalId) {
-        if (!this.negotiatedCapabilities.loadSession) {
+        if (!shouldResumeWithoutHistory && !this.negotiatedCapabilities.loadSession) {
           throw new AgentRuntimeError('load_unsupported', 'session', 'ACP agent cannot restore this session', false);
         }
-        const response = await connection.agent.request(acp.methods.agent.session.load, {
-          sessionId: requestedExternalId,
-          cwd: this.input.workingDir,
-          mcpServers,
-          ...sessionMetadata,
-        });
+        const response = shouldResumeWithoutHistory
+          ? await connection.agent.request(acp.methods.agent.session.resume, {
+              sessionId: requestedExternalId,
+              cwd: this.input.workingDir,
+              mcpServers,
+              ...sessionMetadata,
+            })
+          : await connection.agent.request(acp.methods.agent.session.load, {
+              sessionId: requestedExternalId,
+              cwd: this.input.workingDir,
+              mcpServers,
+              ...sessionMetadata,
+            });
         this.currentExternalSessionId = requestedExternalId;
         await this.definition.configureSession?.(
           connection.agent,
@@ -343,9 +355,10 @@ class AcpDriverSession implements DriverSession {
     sink.stream({ type: 'external_session_id', externalSessionId });
     sink.stream({ type: 'conversation_patch', patch, seq });
     const matchingUpdates = bootstrapUpdates.filter((update) => update.sessionId === externalSessionId);
-    if (isLoading) {
+    // Context-only resume intentionally ignores bootstrap history, including load fallback replay.
+    if (requestedExternalId && resumeMode === 'load') {
       this.reconcileLoadedHistory(turn, sink, matchingUpdates);
-    } else {
+    } else if (!requestedExternalId) {
       for (const update of matchingUpdates) this.projector?.project(update);
     }
     this.sessionReady = true;

@@ -34,6 +34,7 @@ import {
   RuntimeCoordinator,
   StaticRuntimeRegistry,
   setRuntimeStateSnapshot,
+  type RuntimeResumeMode,
   type RuntimeProcessEvent,
   type RuntimeTurnEventEnvelope,
 } from '../runtime/index.js';
@@ -286,7 +287,7 @@ export class SessionManager {
       workingDir: this.getExecutionWorkingDir(session),
     });
 
-    await this.startRuntimeTurn(session, session.prompt, agentSessionId);
+    await this.startRuntimeTurn(session, session.prompt, agentSessionId, session.providerId, 'resume');
     return session;
   }
 
@@ -572,6 +573,7 @@ export class SessionManager {
     prompt: string,
     resumeExternalSessionId?: string | null,
     providerId: string | null = session.providerId,
+    resumeMode: RuntimeResumeMode = 'load',
   ): Promise<void> {
     const workingDir = this.getExecutionWorkingDir(session);
     const env = ExecutionEnv.default(workingDir);
@@ -616,6 +618,7 @@ export class SessionManager {
         msgStore,
         prompt,
         resumeExternalSessionId,
+        resumeMode,
       });
       // Terminal persistence is driven by Runtime turn events. Attach a catch
       // so the public start/message methods do not leave a rejected handle

@@ -10,6 +10,8 @@ Task -> TeamRun -> TeamMember
 
 MemberPreset/TeamTemplate 是配置；创建 TeamRun 时将成员配置快照到 TeamMember，之后修改 preset 不改变运行中团队。JSON string 字段统一经 TeamRunService mapper 转换。
 
+`sessionPolicy = resume_last` 仍为每个 WorkRequest 创建独立的 Tower Session 与 AgentInvocation，只复用同一成员在匹配 workspace/target 上的 Agent 原生上下文。ACP 应使用 context-only `session/resume`；Agent 不支持时可回退 `session/load`，但历史回放属于旧 Session，不能写入新 invocation 的日志或计作新进展。
+
 公开或私聊消息使用结构化 mention/recipient 创建 WorkRequest。不要从显示文本解析 `@name`；使用稳定 `memberId`、busy policy 和可选 commit target。
 
 - `CONFIRM` 请求先进入 `PENDING_APPROVAL`。

@@ -474,9 +474,15 @@ describe('SessionManager TeamRun env injection', () => {
       },
     });
 
+    const startTurnSpy = vi.spyOn((manager as any).runtimeCoordinator, 'startTurn');
     await manager.startFollowUp(nextSession.id, previousSession.id);
 
     expect(spawnFollowUpMock).toHaveBeenCalledTimes(1);
+    expect(startTurnSpy).toHaveBeenCalledWith(expect.objectContaining({
+      towerSessionId: nextSession.id,
+      resumeExternalSessionId: 'agent-native-session-1',
+      resumeMode: 'resume',
+    }));
     expect(spawnFollowUpMock.mock.calls[0]![1]).toBe('agent-native-session-1');
     expect(spawnMock).not.toHaveBeenCalled();
     const spawnConfig = spawnFollowUpMock.mock.calls[0]![0] as ExecutorSpawnConfig;

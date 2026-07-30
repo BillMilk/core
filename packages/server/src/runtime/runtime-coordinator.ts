@@ -89,6 +89,7 @@ export class RuntimeCoordinator {
         prompt: input.prompt,
         msgStore: input.msgStore,
         resumeExternalSessionId: input.resumeExternalSessionId,
+        resumeMode: input.resumeMode,
       }, sink);
       void driverTurn.completion.then(
         (outcome) => {

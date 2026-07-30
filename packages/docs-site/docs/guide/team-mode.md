@@ -127,7 +127,7 @@ Agent 在 Team Room 消息中发送 localhost 链接时，点击链接会打开�
 | --- | --- |
 | `workspacePolicy` | `none`、`shared` 或 `dedicated`，控制成员是否使用共享 workspace 或专用子 workspace |
 | `triggerPolicy` | `MENTION_ONLY` 或 `USER_MESSAGES`，控制成员如何从房间消息触发工作 |
-| `sessionPolicy` | `new_per_request` 或 `resume_last`，控制每个请求新建 session 还是续用上次上下文 |
+| `sessionPolicy` | `new_per_request` 或 `resume_last`；每个请求都有独立的 Tower Session，`resume_last` 仅续用成员上一次的 Agent 原生上下文 |
 | `queueManagementPolicy` | `own_only` 或 `team_pending`，控制成员能看到和管理的 WorkRequest 队列范围 |
 
 成员能力开关控制是否能读房间、发消息、提及成员、停止其他成员工作、读写文件、运行命令、查看 diff 或合并 workspace。

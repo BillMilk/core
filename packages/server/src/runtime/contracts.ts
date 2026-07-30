@@ -62,11 +62,15 @@ export interface RuntimeOpenInput {
   externalSessionId?: string | null;
 }
 
+/** `load` restores this transcript; `resume` only continues the agent's native context. */
+export type RuntimeResumeMode = 'load' | 'resume';
+
 export interface RuntimeRunTurnInput {
   turnId: string;
   prompt: string;
   msgStore: MsgStore;
   resumeExternalSessionId?: string | null;
+  resumeMode?: RuntimeResumeMode;
 }
 
 export interface RuntimeTurnOutcome {
@@ -108,6 +112,7 @@ export interface StartRuntimeTurnInput extends RuntimeOpenInput {
   msgStore: MsgStore;
   prompt: string;
   resumeExternalSessionId?: string | null;
+  resumeMode?: RuntimeResumeMode;
 }
 
 export interface RuntimeTurnHandle {

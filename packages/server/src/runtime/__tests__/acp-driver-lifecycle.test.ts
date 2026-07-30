@@ -16,6 +16,7 @@ function deferred<T>() {
 
 const acpState = vi.hoisted(() => ({
   loadUpdates: [] as Array<{ sessionId: string; update: Record<string, unknown> }>,
+  supportsResume: true,
   notificationHandler: undefined as undefined | ((request: { params: unknown }) => Promise<void>),
   prompt: undefined as undefined | {
     promise: Promise<{ stopReason?: string }>;
@@ -36,6 +37,7 @@ vi.mock('@agentclientprotocol/sdk', () => {
         load: 'session/load',
         new: 'session/new',
         prompt: 'session/prompt',
+        resume: 'session/resume',
         setConfigOption: 'session/set_config_option',
         setMode: 'session/set_mode',
       },
@@ -49,7 +51,13 @@ vi.mock('@agentclientprotocol/sdk', () => {
   };
   acpState.request = vi.fn(async (method: string) => {
     if (method === methods.agent.initialize) {
-      return { protocolVersion: 1, agentCapabilities: { loadSession: true } };
+      return {
+        protocolVersion: 1,
+        agentCapabilities: {
+          loadSession: true,
+          sessionCapabilities: acpState.supportsResume ? { resume: {} } : {},
+        },
+      };
     }
     if (method === methods.agent.session.load) {
       for (const params of acpState.loadUpdates) {
@@ -120,6 +128,7 @@ function setup() {
 beforeEach(() => {
   vi.clearAllMocks();
   acpState.loadUpdates = [];
+  acpState.supportsResume = true;
   acpState.notificationHandler = undefined;
   acpState.prompt = deferred<{ stopReason?: string }>();
 });
@@ -164,6 +173,61 @@ describe('AcpRuntimeDriver lifecycle', () => {
     ]);
 
     await session.cancelTurn('turn-1');
+    await turn.completion;
+    await session.close();
+  });
+
+  it('uses session/resume for a context-only follow-up', async () => {
+    const { sink, input } = setup();
+    const session = await new AcpRuntimeDriver().open(input, sink);
+    const msgStore = new MsgStore();
+
+    const turn = await session.runTurn({
+      turnId: 'turn-resume',
+      prompt: 'continue in a new Tower session',
+      msgStore,
+      resumeExternalSessionId: 'external-1',
+      resumeMode: 'resume',
+    }, sink);
+
+    const methods = vi.mocked(acpState.request).mock.calls.map(([method]) => method);
+    expect(methods).toContain('session/resume');
+    expect(methods).not.toContain('session/load');
+    expect(msgStore.getSnapshot().entries).toEqual([]);
+
+    await session.cancelTurn('turn-resume');
+    await turn.completion;
+    await session.close();
+  });
+
+  it('falls back to session/load without importing history when resume is unsupported', async () => {
+    acpState.supportsResume = false;
+    acpState.loadUpdates = [{
+      sessionId: 'external-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        messageId: 'old-message',
+        content: { type: 'text', text: 'old response' },
+      },
+    }];
+    const { sink, input } = setup();
+    const session = await new AcpRuntimeDriver().open(input, sink);
+    const msgStore = new MsgStore();
+
+    const turn = await session.runTurn({
+      turnId: 'turn-fallback',
+      prompt: 'continue with a legacy agent',
+      msgStore,
+      resumeExternalSessionId: 'external-1',
+      resumeMode: 'resume',
+    }, sink);
+
+    const methods = vi.mocked(acpState.request).mock.calls.map(([method]) => method);
+    expect(methods).toContain('session/load');
+    expect(methods).not.toContain('session/resume');
+    expect(msgStore.getSnapshot().entries).toEqual([]);
+
+    await session.cancelTurn('turn-fallback');
     await turn.completion;
     await session.close();
   });
