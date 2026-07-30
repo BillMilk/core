@@ -24,6 +24,8 @@ SessionManager -> RuntimeCoordinator -> CLI Driver -> Executor / PTY / AgentPipe
 
 DriverSession 可以跨 turn 保留协议连接和 external session id，但 MsgStore 是 turn-bound 资源，必须由 `runTurn` 注入。idle DriverSession 不得捕获 MsgStore，否则 SessionManager 释放 snapshot store 后，延迟 follow-up 会把输出写入失效对象并造成大对象常驻。
 
+ACP 用户停止的语义是取消当前 turn，而不是断开协议连接：先用 `session/cancel` 等待 prompt 收敛，保留健康 DriverSession 供 follow-up 复用；只有取消失败或超时才销毁连接。用户主动取消造成的 prompt rejection 不得投影为连接错误。真正重连仍使用 `session/load`；agent 回放的历史必须先投影到临时 MsgStore，再与本地 snapshot 按稳定 ACP entry ID 做线性合并，本地 user message 保持权威，并以单个 `/entries` replacement patch 提交，不能逐条追加回放事件。
+
 `Session.status = RUNNING` 跟随逻辑 Runtime turn 启动，每次初始 prompt 和 follow-up 都必须在 `startTurn` 边界持久化；不能依赖 OS process `started`，因为 ACP 会跨 turn 复用同一进程。process 事件只维护 `ExecutionProcess`，停止操作也必须优先检查 active turn，再使用持久化终态作兜底。
 
 Route 不直接 spawn PTY，Parser 不更新 Prisma 或 Task 状态。

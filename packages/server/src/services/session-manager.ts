@@ -355,7 +355,10 @@ export class SessionManager {
         console.log(`[SessionManager:snapshot] sendMessage checkpoint before runtime turn replace sessionId=${id}`);
       }
       await this.flushSnapshotPersist(id);
-      await this.runtimeCoordinator.abandonTurn(id);
+      const canReuseDriverSession = await this.runtimeCoordinator.abandonTurn(id);
+      if (!canReuseDriverSession) {
+        await this.runtimeCoordinator.disposeSession(id);
+      }
     }
     await this.waitForPendingAutoCommit(id);
 
@@ -439,12 +442,25 @@ export class SessionManager {
     }
     this.terminalSessions.set(id, SessionStatus.CANCELLED);
 
-    await this.runtimeCoordinator.cancelTurn(id).catch((error) => {
-      this.logSessionError('session.runtimeCancel', error, { sessionId: id });
-    });
-    await this.runtimeCoordinator.disposeSession(id).catch((error) => {
-      this.logSessionError('session.runtimeDispose', error, { sessionId: id });
-    });
+    const runtimeType = this.normalizeRuntimeType(session.runtimeType);
+    if (runtimeType === RuntimeType.ACP && hasActiveTurn) {
+      const canReuseDriverSession = await this.runtimeCoordinator.abandonTurn(id).catch((error) => {
+        this.logSessionError('session.runtimeCancel', error, { sessionId: id });
+        return false;
+      });
+      if (!canReuseDriverSession) {
+        await this.runtimeCoordinator.disposeSession(id).catch((error) => {
+          this.logSessionError('session.runtimeDispose', error, { sessionId: id });
+        });
+      }
+    } else {
+      await this.runtimeCoordinator.cancelTurn(id).catch((error) => {
+        this.logSessionError('session.runtimeCancel', error, { sessionId: id });
+      });
+      await this.runtimeCoordinator.disposeSession(id).catch((error) => {
+        this.logSessionError('session.runtimeDispose', error, { sessionId: id });
+      });
+    }
 
     const msgStore = sessionMsgStoreManager.get(id);
     if (msgStore) {

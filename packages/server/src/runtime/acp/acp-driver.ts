@@ -9,7 +9,7 @@ import {
   type RuntimePermissionOption,
 } from '@agent-tower/shared';
 import { getProviderById, getProviderRuntimeType } from '../../executors/providers.js';
-import { setSessionId } from '../../output/index.js';
+import { MsgStore, setSessionId, type JsonPatch } from '../../output/index.js';
 import { buildMcpConfigResponse } from '../../services/mcp-config.service.js';
 import type {
   DriverSession,
@@ -23,6 +23,7 @@ import { AgentRuntimeError } from '../errors.js';
 import { AcpProcessManager } from './process-manager.js';
 import { getAcpAgentDefinition } from './agents/registry.js';
 import type { AcpAgentDefinition, AcpAgentProfile } from './agents/types.js';
+import { reconcileAcpHistoryEntries } from './history-reconciler.js';
 import { AcpProjector } from './projector.js';
 
 const CONNECT_TIMEOUT_MS = 15_000;
@@ -62,6 +63,7 @@ class AcpDriverSession implements DriverSession {
     permissions: true,
   };
   private readonly pendingPermissions = new Map<string, PendingPermission>();
+  private readonly cancelledTurnIds = new Set<string>();
   readonly runtimeInstanceId = randomUUID();
 
   private constructor(
@@ -144,6 +146,9 @@ class AcpDriverSession implements DriverSession {
     const completion = request.then(
       (response) => ({ stopReason: response.stopReason }),
       (error) => {
+        if (this.cancelledTurnIds.has(turn.turnId)) {
+          return { stopReason: 'cancelled' };
+        }
         const normalized = normalizeAcpError(error, 'prompt');
         projector.projectError(normalized);
         throw normalized;
@@ -157,6 +162,7 @@ class AcpDriverSession implements DriverSession {
 
   async cancelTurn(turnId: string): Promise<void> {
     if (!this.connection || this.currentTurnId !== turnId || !this.currentExternalSessionId) return;
+    this.cancelledTurnIds.add(turnId);
     this.invalidatePermissions(this.currentSink);
     await this.connection.agent.notify(acp.methods.agent.session.cancel, {
       sessionId: this.currentExternalSessionId,
@@ -293,6 +299,7 @@ class AcpDriverSession implements DriverSession {
     const sessionMetadata = this.definition.sessionMetadata?.(this.providerProfile) ?? {};
     const bootstrapUpdates: SessionNotification[] = [];
     this.sessionBootstrapUpdates = bootstrapUpdates;
+    const isLoading = Boolean(requestedExternalId);
     try {
       if (requestedExternalId) {
         if (!this.negotiatedCapabilities.loadSession) {
@@ -337,10 +344,38 @@ class AcpDriverSession implements DriverSession {
     const seq = turn.msgStore.pushPatch(patch);
     sink.stream({ type: 'external_session_id', externalSessionId });
     sink.stream({ type: 'conversation_patch', patch, seq });
-    for (const update of bootstrapUpdates) {
-      if (update.sessionId === externalSessionId) this.projector?.project(update);
+    const matchingUpdates = bootstrapUpdates.filter((update) => update.sessionId === externalSessionId);
+    if (isLoading) {
+      this.reconcileLoadedHistory(turn, sink, matchingUpdates);
+    } else {
+      for (const update of matchingUpdates) this.projector?.project(update);
     }
     this.sessionReady = true;
+  }
+
+  private reconcileLoadedHistory(
+    turn: RuntimeRunTurnInput,
+    sink: RuntimeDriverEventSink,
+    updates: SessionNotification[],
+  ): void {
+    if (updates.length === 0) return;
+    const replayStore = new MsgStore();
+    const replayProjector = new AcpProjector(replayStore, {
+      stream: () => undefined,
+      process: async () => undefined,
+    });
+    for (const update of updates) replayProjector.project(update);
+
+    const mergedEntries = reconcileAcpHistoryEntries(
+      turn.msgStore.getSnapshot().entries,
+      replayStore.getSnapshot().entries,
+    );
+    if (!mergedEntries) return;
+
+    const patch: JsonPatch = [{ op: 'replace', path: '/entries', value: mergedEntries }];
+    turn.msgStore.entryIndex.startFrom(mergedEntries.length);
+    const seq = turn.msgStore.pushPatch(patch);
+    sink.stream({ type: 'conversation_patch', patch, seq });
   }
 
   private handlePermission(
@@ -409,6 +444,7 @@ class AcpDriverSession implements DriverSession {
   }
 
   private clearTurn(turnId: string): void {
+    this.cancelledTurnIds.delete(turnId);
     if (this.currentTurnId !== turnId) return;
     this.currentTurnId = undefined;
     this.currentSink = undefined;

@@ -317,7 +317,7 @@ describe('SessionManager session status vs real process state', () => {
     const runtimeCoordinator = {
       hasActiveTurn,
       startTurn: vi.fn(async () => ({ turnId: 'turn-2', completion })),
-      abandonTurn: vi.fn(async () => undefined),
+      abandonTurn: vi.fn(async () => true),
       cancelTurn: vi.fn(async () => undefined),
       disposeSession: vi.fn(async () => undefined),
       destroyAll: vi.fn(async () => undefined),
@@ -342,7 +342,9 @@ describe('SessionManager session status vs real process state', () => {
       data: { status: SessionStatus.COMPLETED },
     });
     await manager.stop(session.id);
-    expect(runtimeCoordinator.cancelTurn).toHaveBeenCalledWith(session.id);
+    expect(runtimeCoordinator.abandonTurn).toHaveBeenCalledWith(session.id);
+    expect(runtimeCoordinator.cancelTurn).not.toHaveBeenCalled();
+    expect(runtimeCoordinator.disposeSession).not.toHaveBeenCalled();
     expect((await prisma.session.findUnique({ where: { id: session.id } }))?.status)
       .toBe(SessionStatus.CANCELLED);
     await manager.destroyAll();

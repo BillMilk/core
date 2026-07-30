@@ -138,22 +138,39 @@ export class RuntimeCoordinator {
     await session.driverSession.cancelTurn(active.id);
   }
 
-  async abandonTurn(towerSessionId: string): Promise<void> {
+  /** Cancel a superseded turn and report whether its DriverSession is reusable. */
+  async abandonTurn(towerSessionId: string, timeoutMs = 10_000): Promise<boolean> {
     const pendingOpen = this.opening.get(towerSessionId);
     if (pendingOpen) await pendingOpen.catch(() => undefined);
     const session = this.sessions.get(towerSessionId);
     const active = session?.activeTurn;
-    if (!session || !active) return;
+    if (!session || !active) return true;
     active.terminal = true;
     this.invalidatePermissions(towerSessionId, session, active.id);
     session.activeTurn = undefined;
     session.turnState = 'IDLE';
     this.touch(towerSessionId, session);
-    await session.driverSession.cancelTurn(active.id);
-    await Promise.race([
-      active.completion.catch(() => undefined),
-      new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
-    ]);
+
+    const cancellation = (async () => {
+      try {
+        await session.driverSession.cancelTurn(active.id);
+        await active.completion.catch(() => undefined);
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        cancellation,
+        new Promise<boolean>((resolve) => {
+          timeout = setTimeout(() => resolve(false), Math.max(0, timeoutMs));
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
 
   async resolvePermission(towerSessionId: string, requestId: string, optionId: string): Promise<void> {

@@ -122,6 +122,38 @@ describe('RuntimeCoordinator', () => {
     await coordinator.destroyAll();
   });
 
+  it('cancels an abandoned turn, suppresses its terminal event, and reuses the driver session', async () => {
+    const { coordinator, input, session, turns, sinks, events } = setup();
+    const first = await coordinator.startTurn(input);
+    vi.mocked(session.cancelTurn).mockImplementationOnce(async () => {
+      turns[0].resolve({ stopReason: 'cancelled' });
+    });
+
+    await expect(coordinator.abandonTurn(input.towerSessionId, 100)).resolves.toBe(true);
+    await first.completion;
+    sinks[0].stream({ type: 'progress' });
+
+    const second = await coordinator.startTurn({ ...input, prompt: 'continue' });
+    expect(session.cancelTurn).toHaveBeenCalledWith(first.turnId);
+    expect(events).toHaveLength(0);
+    expect(session.close).not.toHaveBeenCalled();
+    expect(vi.mocked(session.runTurn)).toHaveBeenCalledTimes(2);
+
+    turns[1].resolve({ stopReason: 'end_turn' });
+    await second.completion;
+    await coordinator.destroyAll();
+  });
+
+  it('reports an abandon timeout so the caller can dispose the driver session', async () => {
+    const { coordinator, input, session } = setup();
+    await coordinator.startTurn(input);
+
+    await expect(coordinator.abandonTurn(input.towerSessionId, 1)).resolves.toBe(false);
+    expect(session.cancelTurn).toHaveBeenCalledTimes(1);
+    expect(session.close).not.toHaveBeenCalled();
+    await coordinator.destroyAll();
+  });
+
   it('validates permission option ids and returns to running after resolution', async () => {
     const { coordinator, input, sinks, session } = setup();
     const handle = await coordinator.startTurn(input);
