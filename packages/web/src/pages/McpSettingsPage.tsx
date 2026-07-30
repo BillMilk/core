@@ -94,7 +94,7 @@ export function McpSettingsPage() {
               <Server size={12} />
               Entry
             </div>
-            <div className="break-all font-mono text-[12px] leading-relaxed text-neutral-800">{data.args[0] ?? ''}</div>
+            <div className="break-all font-mono text-[12px] leading-relaxed text-neutral-800">{data.args.at(-1) ?? ''}</div>
           </div>
         </div>
       </div>

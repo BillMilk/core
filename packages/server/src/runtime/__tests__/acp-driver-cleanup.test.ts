@@ -23,7 +23,9 @@ describe('AcpRuntimeDriver managed launch cleanup', () => {
   it('removes Pi managed credentials when process startup fails', async () => {
     const env = ExecutionEnv.default(process.cwd())
       .set('PI_PATH', process.execPath)
-      .set('AGENT_TOWER_INTERNAL_TOKEN', 'cleanup-test-token');
+      .set('AGENT_TOWER_INTERNAL_TOKEN', 'cleanup-test-token')
+      .set('AGENT_TOWER_URL', 'http://127.0.0.1:42232')
+      .set('AGENT_TOWER_PORT', '42232');
     await expect(new AcpRuntimeDriver().open({
       towerSessionId: 'tower-cleanup',
       agentType: AgentType.PI_CODING_AGENT,

@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import * as acp from '@agentclientprotocol/sdk';
 import type { SessionNotification } from '@agentclientprotocol/sdk';
 import {
@@ -460,19 +458,14 @@ class AcpDriverSession implements DriverSession {
 }
 
 function buildAcpMcpServers(env: import('../../executors/execution-env.js').ExecutionEnv): acp.McpServer[] {
-  try {
-    const runtimeEnv = { ...process.env, ...env.toObject() };
-    const serverDistDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-    const config = buildMcpConfigResponse({ env: runtimeEnv, serverDistDir });
-    return [{
-      name: config.serverName,
-      command: config.command,
-      args: config.args,
-      env: Object.entries(config.env).map(([name, value]) => ({ name, value })),
-    }];
-  } catch {
-    return [];
-  }
+  const runtimeEnv = { ...process.env, ...env.toObject() };
+  const config = buildMcpConfigResponse({ env: runtimeEnv });
+  return [{
+    name: config.serverName,
+    command: config.command,
+    args: config.args,
+    env: Object.entries(config.env).map(([name, value]) => ({ name, value })),
+  }];
 }
 
 function normalizeAcpError(error: unknown, stage: string): AgentRuntimeError {

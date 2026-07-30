@@ -31,6 +31,7 @@ description: >-
 - 实时变更同时检查 `EventMap`、shared Socket contract、`SocketGateway` 和前端重连/缓存失效。
 - 不绕过 tunnel/access/Socket auth、CSRF、internal token、local-only、preview token 或 loopback 限制。
 - 同时支持 `WORKTREE` 与 `MAIN_DIRECTORY`；不要假设每个项目都是 Git 仓库或每个任务只有一个 workspace。
+- 使用根 `package.json` 固定的 pnpm 版本；新增带安装脚本的依赖时先审核脚本，再在 `pnpm-workspace.yaml` 的 `allowBuilds` 中明确设为 `true` 或 `false`。
 - 保留 PTY early-event handoff、parser exactly-once finish、原始 stdout 兜底和日志脱敏。
 - 列表热路径使用 preview/truncated DTO；完整 task/message 正文按需加载。
 

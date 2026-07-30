@@ -1,6 +1,5 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import * as acp from '@agentclientprotocol/sdk';
 import { AgentType } from '@agent-tower/shared';
 import { which } from '../../../utils/index.js';
@@ -62,8 +61,7 @@ export const piCodingAgentAcpAgentDefinition: AcpAgentDefinition = {
       );
     }
 
-    const serverDistDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-    const mcpConfig = buildMcpConfigResponse({ env: profile.environment, serverDistDir });
+    const mcpConfig = buildMcpConfigResponse({ env: profile.environment });
     const managed = await createManagedDirectory('pi-acp', buildPiConfigFiles(profile, mcpAdapterRoot, mcpConfig.config));
     return {
       command: process.execPath,

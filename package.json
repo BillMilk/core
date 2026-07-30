@@ -4,6 +4,7 @@
   "private": true,
   "description": "AI Agent 任务管理面板",
   "license": "Apache-2.0",
+  "packageManager": "pnpm@11.18.0",
   "scripts": {
     "setup": "pnpm install && pnpm --filter @agent-tower/shared build",
     "dev": "pnpm -r --parallel --filter '!@agent-tower/docs-site' run dev",
@@ -31,6 +32,6 @@
   },
   "engines": {
     "node": ">=22.19.0",
-    "pnpm": ">=8.0.0"
+    "pnpm": "11.18.0"
   }
 }

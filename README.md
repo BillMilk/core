@@ -80,6 +80,8 @@ If access password is enabled, MCP calls use `AGENT_TOWER_INTERNAL_TOKEN` instea
 
 ### Development from Source
 
+Source development requires Node.js `>=22.19.0` and pnpm `11.18.0`. The repository pins the pnpm version through its `packageManager` field.
+
 ```bash
 git clone https://github.com/agent-tower/core.git
 cd agent-tower

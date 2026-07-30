@@ -15,7 +15,7 @@ pnpm --filter @agent-tower/desktop spike
 
 The `spike` script builds `shared`, `server`, `web`, and `desktop`, then starts Electron.
 
-The desktop package currently pins Electron `33.4.11`. Development and packaging require Node `>=22.19.0`; packaged apps carry that Node runtime separately instead of relying on Electron's embedded Node. The workspace `onlyBuiltDependencies` config allows Electron's install script so the local Electron binary can be downloaded during `pnpm install`.
+The desktop package currently pins Electron `33.4.11`. Development and packaging require Node `>=22.19.0` and pnpm `11.18.0`; packaged apps carry that Node runtime separately instead of relying on Electron's embedded Node. The workspace `allowBuilds` config allows Electron's install script so the local Electron binary can be downloaded during `pnpm install`.
 
 To verify the Electron binary is available:
 

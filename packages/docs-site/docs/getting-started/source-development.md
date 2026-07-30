@@ -9,6 +9,8 @@ Agent Tower 是 pnpm monorepo，主要包含 `shared`、`server`、`web`、`desk
 
 ## 准备
 
+源码开发需要 Node.js `>=22.19.0` 和 pnpm `11.18.0`。仓库通过根 `package.json` 的 `packageManager` 字段固定 pnpm 版本。
+
 ```bash
 git clone https://github.com/agent-tower/core.git
 cd agent-tower

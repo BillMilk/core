@@ -48,6 +48,8 @@ export const codexAcpAgentDefinition: AcpAgentDefinition = {
       env: {
         ...environment,
         ELECTRON_RUN_AS_NODE: '1',
+        // Keep Agent Tower's session-scoped MCP when a global server uses the same name.
+        DISABLE_MCP_CONFIG_FILTERING: 'true',
       },
     };
   },

@@ -1,6 +1,4 @@
 import type { FastifyInstance } from 'fastify';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { AgentType } from '../types/index.js';
 import { stripAnsiSequences } from '../output/utils/ansi.js';
 import { discoverSkillCatalog, discoverSlashCommandCatalog } from '../services/slash-command-catalog.service.js';
@@ -8,9 +6,6 @@ import { buildMcpConfigResponse } from '../services/mcp-config.service.js';
 import { prisma } from '../utils/index.js';
 import { runAgentCliCommand } from '../services/agent-cli/command-runner.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const serverPackageRoot = path.resolve(__dirname, '../..');
-const serverDistDir = path.join(serverPackageRoot, 'dist');
 const CURSOR_AGENT_MODEL_COMMANDS = ['agent', 'cursor-agent'] as const;
 
 /** 解析 `cursor-agent --list-models`  stdout（strip ANSI 后按行解析） */
@@ -104,7 +99,7 @@ export async function systemRoutes(app: FastifyInstance) {
   });
 
   app.get('/system/mcp-config', async () => {
-    return buildMcpConfigResponse({ serverDistDir });
+    return buildMcpConfigResponse();
   });
 
   // MCP 上下文检测：优先根据 sessionId 精确定位，fallback 到 cwd 路径匹配活跃工作空间。

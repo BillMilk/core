@@ -161,6 +161,7 @@ describe('ACP Agent definitions', () => {
 
     expect(resolveBundledCodexEntrypoint()).toMatch(/@openai[\\/]codex[\\/]bin[\\/]codex\.js$/);
     expect(launch.env).not.toHaveProperty('CODEX_PATH');
+    expect(launch.env.DISABLE_MCP_CONFIG_FILTERING).toBe('true');
     expect(await definition.checkAvailability(codexProvider)).toEqual({ type: 'INSTALLATION_FOUND' });
   });
 
@@ -223,6 +224,7 @@ describe('ACP Agent definitions', () => {
     }), {});
     const kiroLaunch = await kiro.resolveLaunch({ ...input, agentType: AgentType.KIRO_CLI }, kiroProfile);
     expect(kiroLaunch.args).toEqual(['acp', '--model', 'kiro-model', '--effort', 'high', '--trust-all-tools']);
+    expect(kiroLaunch.env).not.toHaveProperty('DISABLE_MCP_CONFIG_FILTERING');
 
     const openCode = getAcpAgentDefinition(AgentType.OPENCODE);
     const openCodeProfile = openCode.projectProvider(provider(AgentType.OPENCODE, {
@@ -300,6 +302,8 @@ describe('ACP Agent definitions', () => {
       env: {
         PI_PATH: process.execPath,
         AGENT_TOWER_INTERNAL_TOKEN: 'internal-test-token',
+        AGENT_TOWER_URL: 'http://127.0.0.1:42232',
+        AGENT_TOWER_PORT: '42232',
         OPENAI_API_KEY: 'pi-provider-key',
         OPENAI_BASE_URL: 'https://pi.example/v1',
       },
@@ -343,6 +347,8 @@ describe('ACP Agent definitions', () => {
     const piProvider = provider(AgentType.PI_CODING_AGENT, {
       env: {
         AGENT_TOWER_INTERNAL_TOKEN: 'bundled-pi-test-token',
+        AGENT_TOWER_URL: 'http://127.0.0.1:42232',
+        AGENT_TOWER_PORT: '42232',
         HOME: '/agent-tower-missing/home',
         PATH: '/agent-tower-missing/bin',
         PI_CODING_AGENT_PATH: '/agent-tower-missing/bin/pi',
