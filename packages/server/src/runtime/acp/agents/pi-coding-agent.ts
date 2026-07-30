@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
-import { AgentType } from '@agent-tower/shared';
+import { AgentType, type McpConfigResponse } from '@agent-tower/shared';
 import { which } from '../../../utils/index.js';
 import { buildMcpConfigResponse } from '../../../services/mcp-config.service.js';
 import { AgentRuntimeError } from '../../errors.js';
@@ -114,7 +114,7 @@ export const piCodingAgentAcpAgentDefinition: AcpAgentDefinition = {
 function buildPiConfigFiles(
   profile: AcpAgentProfile,
   mcpAdapterRoot: string,
-  mcpConfig: unknown,
+  mcpConfig: McpConfigResponse['config'],
 ): Record<string, string> {
   const settings = structuredClone(profile.settings ?? {});
   const configuredPackages = Array.isArray(settings.packages) ? settings.packages : [];
@@ -126,7 +126,11 @@ function buildPiConfigFiles(
   if (profile.effort) settings.defaultThinkingLevel = profile.effort;
 
   const files: Record<string, string> = {
-    'mcp.json': formattedJson(mcpConfig),
+    'mcp.json': formattedJson({
+      ...mcpConfig,
+      // Team Room prompts use original MCP names; Pi prefixes them with the server name by default.
+      settings: { toolPrefix: 'none' },
+    }),
   };
   const model = profile.model ?? profile.environment.OPENAI_MODEL;
   const baseUrl = profile.environment.OPENAI_BASE_URL

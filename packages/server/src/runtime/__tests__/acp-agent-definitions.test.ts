@@ -332,6 +332,7 @@ describe('ACP Agent definitions', () => {
       baseUrl: 'https://pi.example/v1',
       apiKey: '$OPENAI_API_KEY',
     });
+    expect(mcp.settings).toEqual({ toolPrefix: 'none' });
     expect(mcp.mcpServers['agent-tower'].env.AGENT_TOWER_INTERNAL_TOKEN).toBe('internal-test-token');
     if (process.platform !== 'win32') {
       expect((await stat(directory)).mode & 0o777).toBe(0o700);
