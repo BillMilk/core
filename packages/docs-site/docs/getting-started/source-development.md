@@ -82,6 +82,13 @@ pnpm db:push
 
 发布构建脚本位于 `scripts/build-publish.mjs`。它会构建 `shared`、`server` 和 `web`，然后把可发布 npm 包组装到 `packages/server/publish/`。
 
+发布前应从最终 tarball 执行一次隔离的全局安装验证：
+
+```bash
+pnpm build:publish
+pnpm publish:smoke
+```
+
 文档站是独立静态站点，不参与 CLI npm 包产物。
 
 桌面端打包命令位于 `packages/desktop`，根目录也提供了常用入口：

@@ -1,5 +1,9 @@
 # Desktop 与公开文档
 
+## npm CLI 发布
+
+`scripts/build-publish.mjs` 组装全局 CLI 发布包。保持 Prisma 安装只有一个 client 生成者：发布包 bundled `@prisma/client` 时删除其 `generate`、`postinstall` 和可选 `prisma` peer，由根包 postinstall 使用精确同版本的普通 `prisma` dependency 生成目标平台 client；不要同时启用两处 generate。发布前运行 `pnpm build:publish` 和 `pnpm publish:smoke`，从最终 tarball 验证隔离全局安装、client 语法、模块加载和 query engine。
+
 ## Electron
 
 `packages/desktop` 复用现有 server/web。主进程选择 workspace 或 packaged runtime，校验 bundled assets，启动 loopback server，等待 health 后加载同源 Web UI，并在退出或崩溃时清理子进程。

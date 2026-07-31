@@ -19,6 +19,7 @@
     "docs:build": "pnpm --filter @agent-tower/docs-site build",
     "docs:serve": "pnpm --filter @agent-tower/docs-site serve",
     "build:publish": "node scripts/build-publish.mjs",
+    "publish:smoke": "node scripts/smoke-publish-install.mjs",
     "lint": "pnpm -r run lint",
     "clean": "pnpm -r run clean",
     "db:generate": "pnpm --filter @agent-tower/server run db:generate",

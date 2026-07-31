@@ -49,6 +49,8 @@ pnpm --filter @agent-tower/shared build
 pnpm --filter @agent-tower/server build
 pnpm --filter web build
 pnpm build
+pnpm build:publish
+pnpm publish:smoke
 ```
 
 公开行为变化同步 `packages/docs-site/docs/`；内部计划和专项排障才写顶层 `docs/`。跨包构建遵循 `shared -> server -> web/desktop`。

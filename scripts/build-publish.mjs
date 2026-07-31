@@ -7,7 +7,7 @@
  */
 import { execSync } from 'node:child_process';
 import {
-  cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, chmodSync,
+  cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, chmodSync, realpathSync,
 } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -73,14 +73,59 @@ mkdirSync(sharedDest, { recursive: true });
 cpSync(resolve(sharedDir, 'dist'), resolve(sharedDest, 'dist'), { recursive: true });
 cpSync(resolve(sharedDir, 'package.json'), resolve(sharedDest, 'package.json'));
 
-// Prisma stays as a regular dependency so npm installs engines for the target machine.
+// 6. Bundle @prisma/client without its postinstall generator. npm runs package
+// postinstall scripts concurrently, so leaving both generators enabled can corrupt
+// node_modules/.prisma/client. The regular prisma dependency still installs the
+// target machine's engines, then Agent Tower's postinstall runs the sole generate.
+const prismaClientSrc = realpathSync(resolve(serverDir, 'node_modules/@prisma/client'));
+const prismaClientDest = resolve(publishDir, 'node_modules/@prisma/client');
+mkdirSync(prismaClientDest, { recursive: true });
+cpSync(prismaClientSrc, prismaClientDest, {
+  recursive: true,
+  dereference: true,
+  filter: (src) => {
+    const rel = src.slice(prismaClientSrc.length);
+    return !/[\\/]node_modules(?:[\\/]|$)/.test(rel);
+  },
+});
+const prismaClientPkgPath = resolve(prismaClientDest, 'package.json');
+const prismaClientPkg = JSON.parse(readFileSync(prismaClientPkgPath, 'utf-8'));
+if (prismaClientPkg.scripts) {
+  delete prismaClientPkg.scripts.generate;
+  delete prismaClientPkg.scripts.postinstall;
+}
+// Agent Tower already depends on the exact matching Prisma CLI. Keeping the
+// optional peer on a bundled client makes npm treat that CLI as part of the
+// bundle without packing its files, leaving an empty node_modules/prisma.
+if (prismaClientPkg.peerDependencies) {
+  delete prismaClientPkg.peerDependencies.prisma;
+  if (Object.keys(prismaClientPkg.peerDependencies).length === 0) {
+    delete prismaClientPkg.peerDependencies;
+  }
+}
+if (prismaClientPkg.peerDependenciesMeta) {
+  delete prismaClientPkg.peerDependenciesMeta.prisma;
+  if (Object.keys(prismaClientPkg.peerDependenciesMeta).length === 0) {
+    delete prismaClientPkg.peerDependenciesMeta;
+  }
+}
+writeFileSync(prismaClientPkgPath, JSON.stringify(prismaClientPkg, null, 2) + '\n');
+console.log(`Bundled @prisma/client@${prismaClientPkg.version} without install-time generation`);
+
 // cloudflared's JS wrapper is bundled without its publish-machine binary; the
 // server downloads the correct binary on first tunnel start.
 
-// 6. 生成发布用 package.json
+// 7. 生成发布用 package.json
 const deps = { ...serverPkg.dependencies };
 // 替换 workspace 协议为真实版本
 deps['@agent-tower/shared'] = sharedPkg.version;
+// The generated client and CLI must stay on the same exact Prisma release.
+const prismaPkg = JSON.parse(readFileSync(resolve(serverDir, 'node_modules/prisma/package.json'), 'utf-8'));
+if (prismaPkg.version !== prismaClientPkg.version) {
+  throw new Error(`Prisma version mismatch: prisma=${prismaPkg.version}, client=${prismaClientPkg.version}`);
+}
+deps.prisma = prismaPkg.version;
+deps['@prisma/client'] = prismaClientPkg.version;
 // node-pty 保留在 dependencies 中（bundledDependencies 要求包必须同时在 dependencies 中声明）
 // bundled 的预编译版本会优先使用，npm 不会再触发远程安装/node-gyp
 
@@ -104,7 +149,7 @@ writeFileSync(cloudflaredPkgPath, JSON.stringify(cloudflaredPkg, null, 2) + '\n'
 rmSync(resolve(cloudflaredDest, 'scripts/postinstall.mjs'), { force: true });
 console.log(`Bundled cloudflared@${cloudflaredVersion} JS wrapper without a native binary`);
 
-// 7. 将 @shitiandmw/node-pty 预打包（含多平台 prebuilds，避免用户需要 Python/node-gyp/MSVC）
+// 8. 将 @shitiandmw/node-pty 预打包（含多平台 prebuilds，避免用户需要 Python/node-gyp/MSVC）
 const nodePtyVersion = serverPkg.dependencies['@shitiandmw/node-pty'];
 const nodePtyPnpmDir = resolve(root, `node_modules/.pnpm/@shitiandmw+node-pty@${nodePtyVersion}/node_modules/@shitiandmw/node-pty`);
 const nodePtyDest = resolve(publishDir, 'node_modules/@shitiandmw/node-pty');
@@ -154,6 +199,7 @@ const publishPkg = {
     'prisma/',
     'scripts/',
     'node_modules/@agent-tower/',
+    'node_modules/@prisma/',
     'node_modules/@shitiandmw/',
     'node_modules/cloudflared/',
   ],
@@ -164,7 +210,7 @@ const publishPkg = {
   optionalDependencies: {
     fsevents: '~2.3.3',
   },
-  bundledDependencies: ['@agent-tower/shared', '@shitiandmw/node-pty', 'cloudflared'],
+  bundledDependencies: ['@agent-tower/shared', '@prisma/client', '@shitiandmw/node-pty', 'cloudflared'],
   engines: {
     node: '>=22.19.0',
   },
@@ -185,6 +231,4 @@ console.log('\nTo publish:');
 console.log(`  cd ${publishDir}`);
 console.log('  npm publish --tag latest');
 console.log('\nTo test locally:');
-console.log(`  cd ${publishDir}`);
-console.log('  npm pack');
-console.log('  npm install -g agent-tower-*.tgz');
+console.log('  pnpm publish:smoke');

@@ -27,18 +27,20 @@ node scripts/build-publish.mjs
 
 此脚本会：清理旧产物 → 构建 shared → server → web → 组装到 `packages/server/publish/`
 
-Prisma 必须作为普通 dependency 在目标机器生成本机 engine。发布包捆绑 `@agent-tower/shared`、包含多平台 prebuilds 的 `@shitiandmw/node-pty`，以及不含原生二进制和 postinstall 的 cloudflared JS 包装层；cloudflared 二进制由 server 在首次 Tunnel 启动时按目标平台下载。
+Prisma 安装必须只有一个 Client 生成者。发布包捆绑 `@prisma/client`，但删除其中的 `generate`、`postinstall` 和可选 `prisma` peer；`prisma` CLI 作为与 Client 精确同版本的普通 dependency 安装，由 Agent Tower 根包的 postinstall 在目标机器生成本机 Client 和 engine。发布包还捆绑 `@agent-tower/shared`、包含多平台 prebuilds 的 `@shitiandmw/node-pty`，以及不含原生二进制和 postinstall 的 cloudflared JS 包装层；cloudflared 二进制由 server 在首次 Tunnel 启动时按目标平台下载。
 
 ### 3. 打包检查与冒烟
 
 ```bash
 cd packages/server/publish
 npm pack --dry-run
-npm pack
+cd ../../..
+pnpm publish:smoke
 ```
 
-- 确认 tarball 不含 `node_modules/cloudflared/bin`、`node_modules/prisma` 或 `node_modules/@prisma/client`
-- 在隔离目录安装 tarball，确认 postinstall 完成本机 Prisma Client，并验证首次 Tunnel 启动能安装目标平台 cloudflared
+- 确认 tarball 包含已净化的 `node_modules/@prisma/client`，但不含 `node_modules/prisma`、预生成的 `node_modules/.prisma` 或 `node_modules/cloudflared/bin`
+- `pnpm publish:smoke` 必须从最终 tarball 做隔离全局安装，检查生成 Client 的语法、应用 Prisma 模块加载和 query engine
+- 验证首次 Tunnel 启动能安装目标平台 cloudflared
 - 正式版发布前至少验证 macOS、Windows、Linux 的安装和 CLI 启动
 
 ### 4. 发布
