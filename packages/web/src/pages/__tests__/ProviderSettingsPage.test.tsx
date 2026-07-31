@@ -97,6 +97,10 @@ function findWebsocketSwitch(): HTMLButtonElement | null {
   return document.querySelector('[role="switch"][aria-label="禁用 WebSocket"]')
 }
 
+function findFastModeControl(): HTMLButtonElement | null {
+  return document.querySelector('[data-fast-mode-control] button')
+}
+
 afterEach(() => {
   if (root) act(() => root!.unmount())
   document.body.replaceChildren()
@@ -120,6 +124,7 @@ describe('ProviderFormModal draft test invalidation', () => {
 
     expect(document.querySelector('#provider-api-url')).not.toBeNull()
     expect(document.querySelector('#provider-model')).not.toBeNull()
+    expect(findFastModeControl()).not.toBeNull()
     expect(findButton('高级配置')).not.toBeNull()
     expect([...document.querySelectorAll('button')].some(button => button.textContent?.trim() === 'CLI')).toBe(false)
     expect([...document.querySelectorAll('button')].some(button => button.textContent?.trim() === 'ACP')).toBe(false)
@@ -204,6 +209,20 @@ describe('ProviderFormModal draft test invalidation', () => {
     act(() => request.onSuccess(successfulResult))
 
     expect(transportSwitch?.getAttribute('aria-checked')).toBe('true')
+    expect(document.querySelector('[data-provider-test-result]')).toBeNull()
+  })
+
+  it('invalidates an in-flight test when Codex Fast mode changes', () => {
+    renderModal(initialCodexData())
+    const request = beginTest()
+    const fastModeControl = findFastModeControl()
+    expect(fastModeControl?.textContent).toContain('跟随 Codex')
+
+    act(() => fastModeControl?.click())
+    act(() => findButton('Fast').click())
+    act(() => request.onSuccess(successfulResult))
+
+    expect(fastModeControl?.textContent).toContain('Fast')
     expect(document.querySelector('[data-provider-test-result]')).toBeNull()
   })
 
@@ -316,6 +335,26 @@ describe('ProviderFormModal draft test invalidation', () => {
     })
   })
 
+  it('keeps the Codex Fast mode control and Advanced JSON in one config state', () => {
+    const onSave = vi.fn()
+    renderModal(initialCodexData(), onSave)
+    const fastModeControl = findFastModeControl()
+    expect(fastModeControl).not.toBeNull()
+
+    act(() => fastModeControl?.click())
+    act(() => findButton('Fast').click())
+    act(() => findButton('高级配置').click())
+    const configInput = document.querySelector('textarea') as HTMLTextAreaElement
+    expect(JSON.parse(configInput.value)).toMatchObject({ fastMode: true })
+
+    changeTextInput(configInput, JSON.stringify({ fastMode: false, unknown: 'keep' }, null, 2))
+    expect(fastModeControl?.textContent).toContain('标准速度')
+
+    act(() => findButton('保存 Provider').click())
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect(onSave.mock.calls[0]![0].config).toEqual({ fastMode: false, unknown: 'keep' })
+  })
+
   it('hides execution permission controls while keeping Advanced bypass config editable', () => {
     const onSave = vi.fn()
     renderModal(initialCodexData({
@@ -377,6 +416,16 @@ describe('ProviderFormModal draft test invalidation', () => {
     expect(findButton('保存 Provider').disabled).toBe(true)
   })
 
+  it('blocks test and save for an invalid Fast mode type', () => {
+    renderModal(initialCodexData({ config: { fastMode: 'true' } }))
+    const fastModeControl = findFastModeControl()
+
+    expect(fastModeControl?.disabled).toBe(true)
+    expect(document.body.textContent).toContain('Fast 模式字段必须为 true 或 false')
+    expect(findButton('测试配置').disabled).toBe(true)
+    expect(findButton('保存 Provider').disabled).toBe(true)
+  })
+
   it('explains the native Codex transport accurately', () => {
     renderModal(initialCodexData({ settings: 'model_provider = "ollama"\n' }))
     expect(findWebsocketSwitch()).not.toBeNull()
@@ -389,6 +438,7 @@ describe('ProviderFormModal draft test invalidation', () => {
       agentType: AgentType.CLAUDE_CODE,
     })
     expect(findWebsocketSwitch()).toBeNull()
+    expect(findFastModeControl()).toBeNull()
   })
 
   it('keeps native Codex connection fields under advanced settings', () => {

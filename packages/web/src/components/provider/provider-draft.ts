@@ -434,14 +434,14 @@ export function updateExecutionPermission<T extends { config: Record<string, unk
 export function updateProviderBooleanConfig<T extends { config: Record<string, unknown> }>(
   draft: T,
   capability: ProviderBooleanConfigCapability,
-  enabled: boolean,
+  enabled: boolean | undefined,
 ): Omit<T, 'config'> & { config: Record<string, unknown> } {
+  const config = { ...draft.config }
+  if (enabled === undefined) delete config[capability.path]
+  else config[capability.path] = enabled
   return {
     ...draft,
-    config: {
-      ...draft.config,
-      [capability.path]: enabled,
-    },
+    config,
   }
 }
 

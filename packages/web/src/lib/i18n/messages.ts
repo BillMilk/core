@@ -688,6 +688,13 @@ export const messages: Record<AppLocale, Record<string, string>> = {
     '推理强度': 'Reasoning Effort',
     '强制执行': 'Force Execution',
     '跳过所有确认和沙盒': 'Skip All Confirmations and Sandbox',
+    'Fast 模式': 'Fast mode',
+    '支持的模型速度约提升至 1.5 倍，并增加用量消耗。ChatGPT 登录消耗更多额度；API Key 按 Priority 处理计费。':
+      'Supported models run about 1.5x faster with increased usage. ChatGPT sign-in consumes more credits; API keys use Priority processing rates.',
+    'Fast 模式字段必须为 true 或 false，请在运行配置 JSON 中修正。':
+      'The Fast mode field must be true or false. Fix it in the runtime configuration JSON.',
+    '跟随 Codex': 'Use Codex default',
+    '标准速度': 'Standard speed',
     'Profile': 'Profile',
     '~/.codex/config.toml 中的 profile 名称': 'Profile name in ~/.codex/config.toml',
     '是': 'Yes',

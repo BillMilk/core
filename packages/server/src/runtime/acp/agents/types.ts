@@ -14,6 +14,7 @@ export interface AcpAgentProfile {
   appendPrompt?: string;
   model?: string;
   effort?: string;
+  fastMode?: boolean;
   settings?: Record<string, unknown>;
 }
 

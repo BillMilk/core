@@ -19,6 +19,7 @@ SessionManager -> RuntimeCoordinator -> CLI Driver -> Executor / PTY / AgentPipe
 - Agent Tower 托管的 MCP 启动配置统一由 `mcp-config.service.ts` 生成；Route、ACP Driver 和 Agent Definition 不得自行按 `import.meta.url` 推断 entry。源码开发态使用 server 自带的绝对 `tsx` loader 运行 `src/mcp/index.ts`，编译 CLI 与桌面 runtime 使用各自 `dist/mcp/index.js`；每次启动必须注入当前服务实例的 URL 与 internal token，入口或实例地址缺失时显式失败，不能降级为空 MCP 列表或静默连接默认端口。
 - Definition 创建的临时配置可能包含内部 MCP token，必须使用 `0700` 目录和 `0600` 文件，并把幂等 cleanup 交给 ACP Driver；启动/握手失败、正常 close 和进程意外退出都必须触发清理。
 - Runtime/Agent 专属的 Provider 协议元数据与兼容 Header 放在 Definition 投影层，并合并用户自定义配置；通用 ACP Driver 不感知具体网关认证或来源标识。
+- Agent 专属 ACP session option 只能在对应 Definition 中按 bootstrap response 广告的 `configOptions` 设置，不能假设通用 ACP 都支持。Codex Fast 模式使用 `fast-mode` option；CLI Runtime 则使用 Codex `features.fast_mode`/`service_tier` 配置覆盖。
 - Parser/ACP Projector 将输出转为 `NormalizedEntry` JSON Patch；MsgStore 生成统一 snapshot。
 - ACP `tool_call_update` 是按 `toolCallId` 发送的局部更新；Projector 必须累计并合并工具状态，省略字段沿用旧值、显式 `null` 清除字段。保留 title/kind/status/content/locations/input/output 的结构化语义，不能用单次 update 重建并覆盖完整工具条目；ACP `pending` 也不等同于独立的 permission request。
 - ACP adapter 可能用伪 `tool_call` 转发运行时诊断（例如 `mcp_startup.*`）；这类事件不计入用户工具调用，非阻塞失败应投影为警告日志并保留诊断内容，真正导致 turn/session 失败的错误仍使用错误日志。

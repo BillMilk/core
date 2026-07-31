@@ -15,6 +15,7 @@ export interface CodexAcpProviderProjection {
   environment: Record<string, string>;
   permissionMode: RuntimePermissionMode;
   appendPrompt?: string;
+  fastMode?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -137,9 +138,13 @@ export function projectCodexAcpProvider(
   const appendPrompt = typeof provider.config.appendPrompt === 'string' && provider.config.appendPrompt
     ? provider.config.appendPrompt
     : undefined;
+  const fastMode = typeof provider.config.fastMode === 'boolean'
+    ? provider.config.fastMode
+    : undefined;
   return {
     environment,
     permissionMode: configuredMode === 'AUTO_APPROVE' ? 'AUTO_APPROVE' : 'ASK',
     ...(appendPrompt ? { appendPrompt } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
   };
 }

@@ -26,8 +26,17 @@ describe('provider capability matrix', () => {
       executionPermission: {
         kind: 'config', path: 'dangerouslyBypassApprovalsAndSandbox', riskKind: 'bypass-approvals-and-sandbox',
       },
+      fastMode: { kind: 'config', path: 'fastMode' },
       disableResponsesWebsocket: { kind: 'config', path: 'disableResponsesWebsocket' },
     })
+  })
+
+  it('exposes Fast mode only for Codex', () => {
+    expect(PROVIDER_CAPABILITIES[AgentType.CODEX].fastMode)
+      .toEqual({ kind: 'config', path: 'fastMode' })
+    for (const agentType of Object.values(AgentType).filter(type => type !== AgentType.CODEX)) {
+      expect(PROVIDER_CAPABILITIES[agentType].fastMode).toBeUndefined()
+    }
   })
 
   it('exposes the Responses WebSocket control only for Codex', () => {

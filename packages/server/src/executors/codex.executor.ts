@@ -389,6 +389,8 @@ export interface CodexConfig {
   model?: string;
   /** 跳过所有确认提示并在无沙箱环境下执行命令（危险，仅用于外部已隔离的环境） */
   dangerouslyBypassApprovalsAndSandbox?: boolean;
+  /** 使用 Codex Fast service tier；false 显式关闭，undefined 跟随 Codex 配置。 */
+  fastMode?: boolean;
   /** 强制适用的 Codex Responses API Provider 使用 HTTP transport。 */
   disableResponsesWebsocket?: boolean;
   /** 启用实时网络搜索 */
@@ -517,6 +519,17 @@ export class CodexExecutor extends BaseExecutor {
       } catch (error) {
         throw new ExecutorConfigurationError(this.agentType, error);
       }
+    }
+
+    // Provider-level selection wins over user/profile TOML. Codex gates the
+    // service tier behind this stable feature flag.
+    if (this.config.fastMode === true) {
+      args.push(
+        '-c', 'features.fast_mode=true',
+        '-c', `service_tier=${toTomlLiteral('fast')}`,
+      );
+    } else if (this.config.fastMode === false) {
+      args.push('-c', 'features.fast_mode=false');
     }
 
     // Apply the effective permission mode after raw settings so the safe

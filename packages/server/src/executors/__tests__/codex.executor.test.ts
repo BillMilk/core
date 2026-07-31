@@ -164,6 +164,62 @@ describe('Codex Provider runtime connection snapshots', () => {
     expect(runtime.args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
   });
 
+  it('applies an enabled Fast mode after conflicting raw Codex settings', () => {
+    const provider = createProvider({
+      name: 'Codex Fast mode',
+      agentType: AgentType.CODEX,
+      env: {},
+      config: { fastMode: true },
+      settings: [
+        'service_tier = "flex"',
+        '[features]',
+        'fast_mode = false',
+      ].join('\n'),
+      isDefault: false,
+    });
+    const runtime = inspectRuntime(getExecutorByProvider(provider.id)!);
+
+    expect(runtime.args.lastIndexOf('features.fast_mode=true'))
+      .toBeGreaterThan(runtime.args.lastIndexOf('features.fast_mode=false'));
+    expect(runtime.args.lastIndexOf('service_tier="fast"'))
+      .toBeGreaterThan(runtime.args.lastIndexOf('service_tier="flex"'));
+  });
+
+  it('explicitly disables Fast mode without selecting a service tier', () => {
+    const provider = createProvider({
+      name: 'Codex standard mode',
+      agentType: AgentType.CODEX,
+      env: {},
+      config: { fastMode: false },
+      settings: [
+        'service_tier = "fast"',
+        '[features]',
+        'fast_mode = true',
+      ].join('\n'),
+      isDefault: false,
+    });
+    const runtime = inspectRuntime(getExecutorByProvider(provider.id)!);
+
+    expect(runtime.args.lastIndexOf('features.fast_mode=false'))
+      .toBeGreaterThan(runtime.args.lastIndexOf('features.fast_mode=true'));
+    expect(runtime.args.filter(arg => arg === 'service_tier="fast"')).toHaveLength(1);
+  });
+
+  it('leaves Codex speed settings untouched when Fast mode is not configured', () => {
+    const provider = createProvider({
+      name: 'Codex inherited speed',
+      agentType: AgentType.CODEX,
+      env: {},
+      config: {},
+      settings: '',
+      isDefault: false,
+    });
+    const runtime = inspectRuntime(getExecutorByProvider(provider.id)!);
+
+    expect(runtime.args.some(arg => arg.startsWith('features.fast_mode='))).toBe(false);
+    expect(runtime.args.some(arg => arg.startsWith('service_tier='))).toBe(false);
+  });
+
   it.each([
     [AgentType.CLAUDE_CODE, { dangerouslySkipPermissions: true }],
     [AgentType.GEMINI_CLI, { yolo: true }],

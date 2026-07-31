@@ -102,6 +102,7 @@ const AGENT_CONFIG_FIELDS: Record<string, ConfigFieldMeta[]> = {
   ],
   [AgentType.CODEX]: [
     { key: 'dangerouslyBypassApprovalsAndSandbox', label: '跳过所有确认和沙盒', type: 'switch' },
+    { key: 'fastMode', label: 'Fast 模式', type: 'switch' },
     { key: 'disableResponsesWebsocket', label: '禁用 WebSocket', type: 'switch' },
     { key: 'profile', label: 'Profile', type: 'input', placeholder: '~/.codex/config.toml 中的 profile 名称' },
     APPEND_PROMPT_FIELD,
@@ -160,7 +161,8 @@ const CODEX_SETTINGS_TEMPLATE_ZH = `# Codex config.toml 配置片段 — 通过 
 # model_reasoning_effort = "medium"     # minimal | low | medium | high | xhigh
 # model_reasoning_summary = "auto"      # auto | concise | detailed | none
 # model_verbosity = "medium"            # low | medium | high
-# service_tier = "flex"                 # fast | flex
+# service_tier = "fast"
+# features.fast_mode = true
 
 # ─── 自定义 Model Provider ──────────────────────────────────
 # model_provider = "azure"
@@ -194,7 +196,8 @@ const CODEX_SETTINGS_TEMPLATE_EN = `# Codex config.toml snippet — injected thr
 # model_reasoning_effort = "medium"     # minimal | low | medium | high | xhigh
 # model_reasoning_summary = "auto"      # auto | concise | detailed | none
 # model_verbosity = "medium"            # low | medium | high
-# service_tier = "flex"                 # fast | flex
+# service_tier = "fast"
+# features.fast_mode = true
 
 # ─── Custom Model Provider ──────────────────────────────────
 # model_provider = "azure"
@@ -310,6 +313,7 @@ function getDiagnosticFieldLabel(field: ProviderConfigDiagnostic['field']): stri
   if (field === 'reasoningEffort') return '思考强度'
   if (field === 'model') return '模型'
   if (field === 'executionPermission') return '执行权限'
+  if (field === 'fastMode') return 'Fast 模式'
   if (field === 'disableResponsesWebsocket') return '禁用 WebSocket'
   return field
 }
@@ -493,6 +497,14 @@ export function ProviderFormModal({
   const websocketState = websocketCapability
     ? getProviderBooleanConfigState(formData.config, websocketCapability)
     : null
+  const fastModeCapability = capability.fastMode
+  const fastModeState = fastModeCapability
+    ? getProviderBooleanConfigState(formData.config, fastModeCapability)
+    : null
+  const fastModeValue = fastModeCapability ? formData.config[fastModeCapability.path] : undefined
+  const fastModeSelection = fastModeValue === true
+    ? 'fast'
+    : fastModeValue === false ? 'standard' : 'inherit'
   const reasoningEffort = formData.simplified.reasoningEffort ?? ''
   const reasoningEffortError = reasoningEffort
     && !capability.reasoningEffort?.options?.includes(reasoningEffort)
@@ -585,6 +597,19 @@ export function ProviderFormModal({
     })
   }
 
+  const setFastMode = (selection: string) => {
+    if (!fastModeCapability) return
+    updateForm(previous => {
+      const next = updateProviderBooleanConfig(
+        previous,
+        fastModeCapability,
+        selection === 'inherit' ? undefined : selection === 'fast',
+      )
+      setConfigText(JSON.stringify(next.config, null, 2))
+      return next
+    })
+  }
+
   const handleAgentTypeChange = (value: string) => {
     if (dirty && !window.confirm(t('切换 Agent 类型会清空当前类型的配置，是否继续？'))) return
     const { agentType, runtimeType } = parseProviderAgentOption(value)
@@ -616,7 +641,7 @@ export function ProviderFormModal({
   }
 
   const validateAdvanced = (forTest = false): boolean => {
-    let valid = !configError && !permissionState.error && !acpPermissionModeError && !websocketState?.error && !reasoningEffortError
+    let valid = !configError && !permissionState.error && !acpPermissionModeError && !fastModeState?.error && !websocketState?.error && !reasoningEffortError
     const settings = formData.settings.trim()
     if (settings && (settingsTouched || forTest)) {
       try {
@@ -700,7 +725,7 @@ export function ProviderFormModal({
   )
   const apiKeyAdvancedManaged = apiKeyStatus === 'advanced'
   const keyConfigured = apiKeyStatus !== 'unconfigured'
-  const saveBlocked = !formData.name.trim() || !!apiBaseUrlError || !!configError || !!permissionState.error || !!acpPermissionModeError || !!websocketState?.error || !!reasoningEffortError || (!!settingsError && settingsTouched) || conflicts.length > 0
+  const saveBlocked = !formData.name.trim() || !!apiBaseUrlError || !!configError || !!permissionState.error || !!acpPermissionModeError || !!fastModeState?.error || !!websocketState?.error || !!reasoningEffortError || (!!settingsError && settingsTouched) || conflicts.length > 0
 
   return (
     <>
@@ -711,7 +736,7 @@ export function ProviderFormModal({
       className="max-w-3xl"
       action={
         <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <Button variant="outline" onClick={handleTest} disabled={testProvider.isPending || !!apiBaseUrlError || !!configError || !!permissionState.error || !!acpPermissionModeError || !!websocketState?.error || !!reasoningEffortError || (!!settingsError && settingsTouched) || conflicts.length > 0}>
+          <Button variant="outline" onClick={handleTest} disabled={testProvider.isPending || !!apiBaseUrlError || !!configError || !!permissionState.error || !!acpPermissionModeError || !!fastModeState?.error || !!websocketState?.error || !!reasoningEffortError || (!!settingsError && settingsTouched) || conflicts.length > 0}>
             {testProvider.isPending ? <Loader2 className="animate-spin" /> : <FlaskConical />}
             {testProvider.isPending ? t('测试中...') : t('测试配置')}
           </Button>
@@ -885,6 +910,33 @@ export function ProviderFormModal({
               error={reasoningEffortError}
             />
           )}
+          {fastModeCapability && fastModeState && (
+            <section className="border-t border-border pt-3" data-fast-mode-control>
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_180px] sm:items-center">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-foreground">{t('Fast 模式')}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    {t('支持的模型速度约提升至 1.5 倍，并增加用量消耗。ChatGPT 登录消耗更多额度；API Key 按 Priority 处理计费。')}
+                  </div>
+                </div>
+                <Select
+                  value={fastModeSelection}
+                  disabled={!!fastModeState.error}
+                  onChange={setFastMode}
+                  options={[
+                    { value: 'inherit', label: t('跟随 Codex') },
+                    { value: 'standard', label: t('标准速度') },
+                    { value: 'fast', label: 'Fast' },
+                  ]}
+                />
+              </div>
+              {fastModeState.error && (
+                <p role="alert" className="mt-1 text-xs text-destructive">
+                  {t('Fast 模式字段必须为 true 或 false，请在运行配置 JSON 中修正。')}
+                </p>
+              )}
+            </section>
+          )}
           {websocketCapability && websocketState && (
             <section className="border-t border-border pt-3">
               <div className="flex items-center justify-between gap-3">
@@ -962,7 +1014,7 @@ export function ProviderFormModal({
 
         <CollapsibleSection
           title={t('高级配置')}
-          defaultOpen={!!configError || !!settingsError || !!permissionState.error || conflicts.length > 0}
+          defaultOpen={!!configError || !!settingsError || !!permissionState.error || !!fastModeState?.error || conflicts.length > 0}
         >
           <div>
             <label className="mb-1 block text-xs font-medium text-foreground">{t('运行配置 (JSON)')}</label>

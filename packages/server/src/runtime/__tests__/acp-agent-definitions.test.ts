@@ -1,4 +1,4 @@
-import type * as acp from '@agentclientprotocol/sdk';
+import * as acp from '@agentclientprotocol/sdk';
 import { AgentType, RuntimeType } from '@agent-tower/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { access, readFile, stat } from 'node:fs/promises';
@@ -163,6 +163,67 @@ describe('ACP Agent definitions', () => {
     expect(launch.env).not.toHaveProperty('CODEX_PATH');
     expect(launch.env.DISABLE_MCP_CONFIG_FILTERING).toBe('true');
     expect(await definition.checkAvailability(codexProvider)).toEqual({ type: 'INSTALLATION_FOUND' });
+  });
+
+  it.each([
+    ['boolean', true, false, true],
+    ['select', false, 'on', 'off'],
+  ] as const)('configures Codex Fast mode through the advertised %s ACP option', async (
+    type,
+    configured,
+    currentValue,
+    expectedValue,
+  ) => {
+    const definition = getAcpAgentDefinition(AgentType.CODEX);
+    const profile = definition.projectProvider(provider(AgentType.CODEX, {
+      config: { fastMode: configured },
+    }), {});
+    const request = vi.fn().mockResolvedValue({ configOptions: [] });
+
+    await definition.configureSession?.({ request } as unknown as acp.ClientContext, 'codex-session-1', {
+      configOptions: [{
+        id: 'fast-mode',
+        name: 'Fast mode',
+        type,
+        currentValue,
+        ...(type === 'select' ? { options: [{ value: 'off', name: 'Off' }, { value: 'on', name: 'On' }] } : {}),
+      }] as never,
+    }, profile);
+
+    expect(request).toHaveBeenCalledWith(acp.methods.agent.session.setConfigOption, {
+      sessionId: 'codex-session-1',
+      configId: 'fast-mode',
+      value: expectedValue,
+    });
+  });
+
+  it('leaves Codex ACP speed unchanged when the Provider does not configure it', async () => {
+    const definition = getAcpAgentDefinition(AgentType.CODEX);
+    const profile = definition.projectProvider(provider(AgentType.CODEX), {});
+    const request = vi.fn();
+
+    await definition.configureSession?.({ request } as unknown as acp.ClientContext, 'codex-session-2', {
+      configOptions: [{ id: 'fast-mode', type: 'boolean', currentValue: false }] as never,
+    }, profile);
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('does not configure Codex Fast mode when the current model does not advertise it', async () => {
+    const definition = getAcpAgentDefinition(AgentType.CODEX);
+    const profile = definition.projectProvider(provider(AgentType.CODEX, {
+      config: { fastMode: true },
+    }), {});
+    const request = vi.fn();
+
+    await definition.configureSession?.(
+      { request } as unknown as acp.ClientContext,
+      'codex-session-3',
+      { configOptions: [] },
+      profile,
+    );
+
+    expect(request).not.toHaveBeenCalled();
   });
 
   it('projects Qwen OpenAI-compatible credentials without inheriting stale values', () => {

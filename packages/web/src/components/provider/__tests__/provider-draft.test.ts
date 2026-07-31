@@ -242,6 +242,24 @@ describe('provider draft helpers', () => {
       })
   })
 
+  it('reads and immutably updates Codex Fast mode without coercion', () => {
+    const capability = PROVIDER_CAPABILITIES[AgentType.CODEX].fastMode!
+    const draft = { config: { unknown: { keep: true } } }
+
+    expect(getProviderBooleanConfigState(draft.config, capability))
+      .toEqual({ enabled: false, error: null })
+    const enabled = updateProviderBooleanConfig(draft, capability, true)
+    expect(enabled.config).toEqual({ unknown: { keep: true }, fastMode: true })
+    expect(getProviderBooleanConfigState(enabled.config, capability))
+      .toEqual({ enabled: true, error: null })
+    expect(draft.config).toEqual({ unknown: { keep: true } })
+    expect(updateProviderBooleanConfig(enabled, capability, undefined).config)
+      .toEqual({ unknown: { keep: true } })
+
+    expect(getProviderBooleanConfigState({ fastMode: 'true' }, capability))
+      .toEqual({ enabled: false, error: 'fastMode must be true or false' })
+  })
+
   it('writes simplified Codex fields into Advanced sources without losing unknown values', () => {
     const settings = [
       '# keep leading',

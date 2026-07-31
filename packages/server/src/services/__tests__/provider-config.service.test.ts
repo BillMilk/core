@@ -681,6 +681,41 @@ describe('provider config mapper', () => {
     })).toEqual([]);
   });
 
+  it('round-trips Codex Fast mode and rejects non-booleans', () => {
+    for (const value of [undefined, false, true]) {
+      const result = normalizeProviderDraft({
+        name: 'Codex speed',
+        agentType: AgentType.CODEX,
+        config: value === undefined
+          ? { unknown: { keep: true } }
+          : { fastMode: value, unknown: { keep: true } },
+      });
+      expect(result.diagnostics).toEqual([]);
+      expect(result.provider.config.fastMode).toBe(value);
+      expect(result.provider.config.unknown).toEqual({ keep: true });
+      expect(redactProvider(result.provider).config.fastMode).toBe(value);
+    }
+
+    for (const value of ['true', 1, null, {}]) {
+      const result = normalizeProviderDraft({
+        name: 'Invalid Codex speed',
+        agentType: AgentType.CODEX,
+        config: { fastMode: value, unknown: 'keep' },
+      });
+      expect(result.diagnostics).toContainEqual({
+        field: 'fastMode',
+        code: 'INVALID_TYPE',
+        message: 'fastMode must be true or false',
+      });
+      expect(result.provider.config.unknown).toBe('keep');
+    }
+
+    expect(validateProviderMappedFields({
+      agentType: AgentType.CLAUDE_CODE,
+      config: { fastMode: 'legacy-unknown-value' },
+    })).toEqual([]);
+  });
+
   it('rejects a reserved built-in Codex alias when transport disable is enabled', () => {
     const aliasTable = [
       '[model_providers.agent-tower-openai-http]',

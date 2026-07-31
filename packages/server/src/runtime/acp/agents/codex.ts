@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import * as acp from '@agentclientprotocol/sdk';
 import { AgentType } from '@agent-tower/shared';
 import { which } from '../../../utils/index.js';
 import { AgentRuntimeError } from '../../errors.js';
@@ -65,6 +66,21 @@ export const codexAcpAgentDefinition: AcpAgentDefinition = {
     return available
       ? { type: 'INSTALLATION_FOUND' }
       : { type: 'NOT_FOUND', error: 'Bundled Codex Runtime was not found' };
+  },
+
+  async configureSession(context, sessionId, response, profile) {
+    if (profile.fastMode === undefined) return;
+    const option = response.configOptions?.find(candidate => candidate.id === 'fast-mode');
+    if (!option) return;
+    const value = option.type === 'boolean'
+      ? profile.fastMode
+      : profile.fastMode ? 'on' : 'off';
+    if (option.currentValue === value) return;
+    await context.request(acp.methods.agent.session.setConfigOption, {
+      sessionId,
+      configId: option.id,
+      value,
+    });
   },
 };
 

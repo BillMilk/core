@@ -118,6 +118,7 @@ describe('provider routes', () => {
     expect(response.json()[AgentType.CODEX]).toMatchObject({
       apiKey: { path: 'OPENAI_API_KEY' },
       reasoningEffort: { path: 'model_reasoning_effort' },
+      fastMode: { kind: 'config', path: 'fastMode' },
       disableResponsesWebsocket: { kind: 'config', path: 'disableResponsesWebsocket' },
     });
     expect(response.json()[AgentType.GEMINI_CLI]).toMatchObject({

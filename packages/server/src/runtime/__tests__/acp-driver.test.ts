@@ -14,6 +14,7 @@ describe('AcpRuntimeDriver', () => {
       env: { PROXY_ACCESS: 'provider-secret' },
       config: {
         model: 'gpt-custom',
+        fastMode: true,
         disableResponsesWebsocket: true,
         permissionMode: 'AUTO_APPROVE',
         appendPrompt: '\nFollow repository instructions.',
@@ -34,6 +35,7 @@ describe('AcpRuntimeDriver', () => {
     });
 
     expect(projection.permissionMode).toBe('AUTO_APPROVE');
+    expect(projection.fastMode).toBe(true);
     expect(projection.appendPrompt).toBe('\nFollow repository instructions.');
     expect(projection.environment.OPENAI_BASE_URL).toBeUndefined();
     expect(projection.environment.CODEX_API_KEY).toBeUndefined();

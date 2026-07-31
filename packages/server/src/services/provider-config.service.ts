@@ -425,6 +425,18 @@ export function validateProviderMappedFields(
     });
   }
 
+  const fastModeCapability = capability.fastMode;
+  if (fastModeCapability) {
+    const fastMode = provider.config[fastModeCapability.path];
+    if (fastMode !== undefined && typeof fastMode !== 'boolean') {
+      diagnostics.push({
+        field: 'fastMode',
+        code: 'INVALID_TYPE',
+        message: `${fastModeCapability.path} must be true or false`,
+      });
+    }
+  }
+
   const websocketCapability = capability.disableResponsesWebsocket;
   if (websocketCapability) {
     const disableResponsesWebsocket = provider.config[websocketCapability.path];

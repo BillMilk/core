@@ -31,6 +31,7 @@ export interface ProviderCapability {
   model: ProviderMappedFieldCapability
   reasoningEffort?: ProviderMappedFieldCapability
   executionPermission: ProviderExecutionPermissionCapability
+  fastMode?: ProviderBooleanConfigCapability
   disableResponsesWebsocket?: ProviderBooleanConfigCapability
   settingsFormat?: 'json' | 'toml'
 }
@@ -88,6 +89,10 @@ export const PROVIDER_CAPABILITIES: ProviderCapabilityMatrix = {
       kind: 'config',
       path: 'dangerouslyBypassApprovalsAndSandbox',
       riskKind: 'bypass-approvals-and-sandbox',
+    },
+    fastMode: {
+      kind: 'config',
+      path: 'fastMode',
     },
     disableResponsesWebsocket: {
       kind: 'config',

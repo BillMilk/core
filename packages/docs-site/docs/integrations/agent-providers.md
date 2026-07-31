@@ -43,7 +43,7 @@ ACP Provider 沿用对应 Agent 的认证与模型配置，而不是使用一套
 
 | Agent | 连接配置 |
 | --- | --- |
-| Codex (ACP) | 内置 Codex Runtime；配置 `OPENAI_API_KEY`、API 地址、模型、推理强度和 Codex TOML；第三方 OpenAI-compatible 网关会投影为独立的 Codex model provider |
+| Codex (ACP) | 内置 Codex Runtime；配置 `OPENAI_API_KEY`、API 地址、模型、推理强度、Fast 模式和 Codex TOML；第三方 OpenAI-compatible 网关会投影为独立的 Codex model provider |
 | Claude Code (ACP) | 内置 Claude Runtime；配置 `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`、模型、effort 和 Claude settings JSON |
 | Qwen Code (ACP) | `OPENAI_API_KEY`、`OPENAI_BASE_URL`、模型和权限策略 |
 | Gemini CLI (ACP) | `GEMINI_API_KEY`、模型和权限策略；根据已安装版本选择 `--acp` 或 `--experimental-acp` |
@@ -54,6 +54,16 @@ ACP Provider 沿用对应 Agent 的认证与模型配置，而不是使用一套
 | Grok Build (ACP) | `OPENAI_API_KEY` 会映射为 `XAI_API_KEY`，并支持 API 地址、模型和权限策略 |
 
 启动时，通用 ACP Driver 会按 Agent Definition 将 Provider 配置投影为对应 adapter 或原生 ACP CLI 的启动参数、环境变量和 Session 配置。
+
+### Codex Fast 模式
+
+Codex CLI 和 Codex (ACP) Provider 都可以启用 Fast 模式。它只对 Codex 当前声明支持 Fast tier 的模型生效；支持的模型速度约提升至 1.5 倍，同时增加用量消耗。
+
+- Codex CLI Runtime 会为初始执行和 follow-up 注入 `features.fast_mode = true` 与 `service_tier = "fast"`。
+- Codex ACP Runtime 会在 adapter 广告 `fast-mode` session option 后，通过 [ACP session config option](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/protocol/v2/session-config-options.mdx) 的 `session/set_config_option` 设置，不会把 `/fast` 当作 prompt 发送。
+- 使用 ChatGPT 登录时，Fast 模式按更高倍率消耗额度；使用 API Key 时走 API Priority processing 的独立计费。可用模型和费率以 [Codex Speed 官方文档](https://learn.chatgpt.com/docs/agent-configuration/speed) 为准。
+
+Provider 未配置该字段时沿用 Codex 自身配置；显式关闭时，该 Provider 使用标准速度。
 
 Claude Code 与 Codex 的 ACP adapter 及其兼容 Runtime 随 Agent Tower 发布，默认不要求全局安装 `claude` 或 `codex`；可以分别通过 `CLAUDE_PATH`/`CLAUDE_CODE_EXECUTABLE` 和 `CODEX_PATH` 显式覆盖。Pi Coding Agent 的 npm Runtime 同样随 Agent Tower 发布，可以通过 `PI_CODING_AGENT_PATH` 或 `PI_PATH` 覆盖。
 

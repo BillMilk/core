@@ -332,7 +332,7 @@ export interface ProviderDraftInput {
 }
 
 export interface ProviderConfigDiagnostic {
-  field: 'name' | 'apiBaseUrl' | 'apiKey' | 'model' | 'reasoningEffort' | 'executionPermission' | 'disableResponsesWebsocket' | 'env' | 'config' | 'settings'
+  field: 'name' | 'apiBaseUrl' | 'apiKey' | 'model' | 'reasoningEffort' | 'executionPermission' | 'fastMode' | 'disableResponsesWebsocket' | 'env' | 'config' | 'settings'
   code: 'REQUIRED' | 'INVALID_URL' | 'INVALID_ENUM' | 'INVALID_TYPE' | 'INVALID_FORMAT' | 'CONFLICT'
   message: string
 }
