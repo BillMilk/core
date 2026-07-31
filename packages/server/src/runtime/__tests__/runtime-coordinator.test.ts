@@ -52,10 +52,12 @@ function setup() {
   };
   const events: Parameters<RuntimeCoordinatorHost['onTurnEvent']>[0][] = [];
   const states: Parameters<RuntimeCoordinatorHost['onRuntimeState']>[0][] = [];
+  const onDriverSessionDisposed = vi.fn();
   const host: RuntimeCoordinatorHost = {
     onTurnEvent: (event) => events.push(event),
     onRuntimeState: (state) => states.push(state),
     onProcessEvent: vi.fn(async () => undefined),
+    onDriverSessionDisposed,
   };
   const coordinator = new RuntimeCoordinator(new StaticRuntimeRegistry([driver]), host);
   const input = {
@@ -68,7 +70,7 @@ function setup() {
     msgStore: new MsgStore(),
     prompt: 'hello',
   };
-  return { coordinator, input, session, turns, sinks, events, states };
+  return { coordinator, input, session, turns, sinks, events, states, onDriverSessionDisposed };
 }
 
 describe('RuntimeCoordinator', () => {
@@ -198,10 +200,11 @@ describe('RuntimeCoordinator', () => {
   });
 
   it('awaits driver disposal during shutdown', async () => {
-    const { coordinator, input, session } = setup();
+    const { coordinator, input, session, onDriverSessionDisposed } = setup();
     await coordinator.startTurn(input);
     await coordinator.destroyAll();
     expect(session.close).toHaveBeenCalledTimes(1);
+    expect(onDriverSessionDisposed).toHaveBeenCalledWith(input.towerSessionId);
     expect(coordinator.getState(input.towerSessionId).turnState).toBe('IDLE');
   });
 });

@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createMcpServer } from './server.js';
 import { resolveDataDir } from '../utils/data-dir.js';
-import { requireInternalApiTokenFromEnv } from '../utils/internal-api-token.js';
+import { readInternalApiTokenFromEnv } from '../utils/internal-api-token.js';
+import { AGENT_API_CREDENTIAL_ENV } from '../utils/agent-api-credential.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -44,8 +45,14 @@ async function main() {
 
   console.error(`[agent-tower-mcp] Connecting to backend at ${baseUrl}`);
 
+  const agentApiCredential = process.env[AGENT_API_CREDENTIAL_ENV]?.trim();
+  const internalApiToken = readInternalApiTokenFromEnv();
+  if (!agentApiCredential && !internalApiToken) {
+    throw new Error(`${AGENT_API_CREDENTIAL_ENV} or AGENT_TOWER_INTERNAL_TOKEN is required for Agent Tower API access`);
+  }
   const server = await createMcpServer(baseUrl, {
-    internalApiToken: requireInternalApiTokenFromEnv(),
+    agentApiCredential,
+    internalApiToken: internalApiToken ?? undefined,
   });
   const transport = new StdioServerTransport();
   await server.connect(transport);

@@ -32,6 +32,13 @@ export const queryKeys = {
     gitStatus: (id: string) => ['workspaces', 'gitStatus', id] as const,
   },
 
+  workspaceServices: {
+    all: ['workspace-services'] as const,
+    list: (workspaceId: string) => ['workspace-services', 'list', workspaceId] as const,
+    logs: (workspaceId: string, name: string) =>
+      ['workspace-services', 'logs', workspaceId, name] as const,
+  },
+
   previews: {
     all: ['previews'] as const,
     status: (workspaceId: string) => ['previews', 'status', workspaceId] as const,

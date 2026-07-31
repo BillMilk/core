@@ -394,9 +394,10 @@ describe('TaskService', () => {
     });
   });
 
-  it('marks a task deleted and enqueues a cleanup job without waiting for resource cleanup', async () => {
+  it('stops background services, marks a task deleted, and defers remaining cleanup', async () => {
     const stopSessionMock = vi.fn();
     const cleanupTriggerMock = vi.fn();
+    const stopBackgroundServicesMock = vi.fn(async () => {});
     const eventBus = new EventBus();
     const deletedEvents: Array<{ taskId: string; projectId: string }> = [];
     eventBus.on('task:deleted', (payload) => deletedEvents.push(payload));
@@ -404,6 +405,7 @@ describe('TaskService', () => {
       eventBus,
       { stop: stopSessionMock } as unknown as SessionManager,
       { trigger: cleanupTriggerMock },
+      { stopAllForWorkspace: stopBackgroundServicesMock },
     );
     const project = await prisma.project.create({
       data: {
@@ -521,6 +523,9 @@ describe('TaskService', () => {
 
     await expect(service.delete(task.id)).resolves.toBe(true);
 
+    expect(stopBackgroundServicesMock).toHaveBeenCalledTimes(2);
+    expect(stopBackgroundServicesMock).toHaveBeenCalledWith(mainWorkspace.id);
+    expect(stopBackgroundServicesMock).toHaveBeenCalledWith(memberWorkspace.id);
     expect(stopSessionMock).not.toHaveBeenCalled();
     expect(removeWorktreeMock).not.toHaveBeenCalled();
     expect(deleteBranchIfSafeMock).not.toHaveBeenCalled();
@@ -759,7 +764,15 @@ describe('TaskService', () => {
 
   it('processes a cleanup job and hard-deletes task records after resources are cleaned', async () => {
     const stopSessionMock = vi.fn();
-    const cleanupService = new TaskCleanupService({ stop: stopSessionMock } as unknown as SessionManager);
+    const stopBackgroundServicesMock = vi.fn(async () => {});
+    const releaseBackgroundLogsMock = vi.fn(async () => {});
+    const cleanupService = new TaskCleanupService(
+      { stop: stopSessionMock } as unknown as SessionManager,
+      {
+        stopAllForWorkspace: stopBackgroundServicesMock,
+        releaseLogsForWorkspace: releaseBackgroundLogsMock,
+      },
+    );
     const project = await prisma.project.create({
       data: {
         name: 'Task cleanup project',
@@ -818,6 +831,10 @@ describe('TaskService', () => {
 
     await expect(cleanupService.processDueJobs()).resolves.toBe(1);
 
+    expect(stopBackgroundServicesMock).toHaveBeenCalledWith(workspace.id);
+    expect(releaseBackgroundLogsMock).toHaveBeenCalledWith(workspace.id);
+    expect(stopBackgroundServicesMock.mock.invocationCallOrder[0])
+      .toBeLessThan(removeWorktreeMock.mock.invocationCallOrder[0]);
     expect(stopSessionMock).toHaveBeenCalledWith(runningSession.id, { skipTeamRunReconcile: true });
     expect(removeWorktreeMock).toHaveBeenCalledWith(workspace.worktreePath);
     expect(deleteBranchIfSafeMock).toHaveBeenCalledWith(workspace.branchName, {

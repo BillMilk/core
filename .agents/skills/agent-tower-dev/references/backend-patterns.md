@@ -55,10 +55,14 @@ Service/Manager -> EventMap -> SocketGateway -> shared event/payload -> web sync
 - Agent、文件、终端和 preview 使用 DTO 的 `workingDir`，先判断 Git capability/workspace kind。
 - 复用 `WorkspaceService` 与 `WorktreeManager`，不在 Route 或前端拼接 branch/worktree 路径。
 - watcher、hibernation 和异步 cleanup 必须随 workspace/task 生命周期注册、恢复、释放或重试。
+- 预期跨 Agent turn 持续运行的 server、watcher 和 worker 必须走 workspace-context background service MCP；普通 Agent PTY 仍在 turn 结束时清理整棵进程树，不使用 `nohup`、`disown` 或字符串拦截绕过。
+- `WorkspaceBackgroundService` 定义归 workspace，独立 PTY 归 app-owned process manager；Agent Session/CLI/ACP/Socket 结束不停止它。显式 stop、workspace hibernate/archive/delete、task/project cleanup 会先停止进程树并将 desired state 置为 STOPPED；reactivate 不恢复。start/restart 与 merge、hibernate、archive、delete、task/project cleanup 必须共用 app 级 workspace lifecycle barrier，并在 barrier 内完成 stop、文件系统动作和终态写入。应用优雅关闭只停止 runtime 并保留 desired state，启动时重建仍有效的 desired RUNNING 服务。
+- 后台服务命令使用 `command + args[]` 和 workspace 内相对 cwd，不接受任意 env 或 shell 字符串；托管 Agent 使用服务端签发并绑定 session/invocation 的 opaque credential，不接触应用级 internal token。后端从 credential 恢复身份并绑定 session/workspace，TeamRun 还重验 invocation、active member 与 `runCommands`。credential 跟随 DriverSession/MCP transport，跨自然完成与 follow-up 保持有效，只在 DriverSession dispose、显式 Session stop/delete、启动失败或 app destroy 时撤销。workspace-service REST 只允许通过 AccessAuth 的 browser caller 读取 list/logs；start/update/input/stop/restart 仍仅限 Agent/MCP/internal 并在 route/service 双层拒绝 browser，公共 status cookie、缺少 Origin/Referer 或自报 identity 都不能换取控制权限。服务自然退出只记录 EXITED/FAILED，不自动 crash restart；日志仅为内存有界 buffer，实体删除时显式释放。日志 seq 只在同一 `runtimeInstanceId` generation 内有效；增量请求携带上一响应的 generation，响应返回 manager 的真实 generation 与独立 `reset`/`truncated`/`hasMore`，客户端按 generation 替换缓存且不能把正常分页当成日志丢失。
+- Unix workspace background process 的 root PTY 与 descendant process group 所有 poll/signal 都必须经过可注入 identity adapter，并在发送信号前复验 PID/PGID、birth identity 和每次 launch 的唯一 ownership token；禁止回退到未校验的 `pty.kill`/`child.kill`。Linux 使用 `/proc` start ticks，macOS 的秒级 start marker 必须与唯一 launch token 组合，避免同秒 PID/PGID 复用误杀。Windows 保留 `taskkill /T /F` tree-kill 路径。
 
 ## 认证与安全
 
-HTTP 同时受 tunnel session 和可选 access password 保护；内部进程使用 internal token，浏览器使用 HttpOnly cookie 与同源写请求检查，Socket namespace 有对应认证。
+HTTP 同时受 tunnel session 和可选 access password 保护；应用级内部进程/手动 MCP 使用 internal token，托管 Agent 使用 per-session/invocation credential，浏览器使用签名 HttpOnly cookie 与同源写请求检查，Socket namespace 有对应认证。
 
 - 公共 endpoint 白名单保持最小，Agent CLI 安装接口保持 local-only。
 - 使用 `writeErrorLog` 脱敏，不记录 token、cookie、prompt、provider secret 或 TeamRun identity。

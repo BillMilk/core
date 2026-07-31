@@ -292,6 +292,7 @@ model Workspace {
   previewTarget     String? // Preview 代理目标（仅允许 loopback 地址）
   hibernatedAt      DateTime? // 自动休眠时间
   sessions          Session[]
+  backgroundServices WorkspaceBackgroundService[]
   verdicts          WorkspaceVerdict[]
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
@@ -303,6 +304,33 @@ model Workspace {
   @@index([taskId, parentWorkspaceId])
   @@index([workspaceKind])
   @@index([workingDir])
+}
+
+// Workspace-owned long-running process definition and runtime snapshot.
+// WorkspaceBackgroundServiceDesiredState: RUNNING, STOPPED
+// WorkspaceBackgroundServiceRuntimeState: STOPPED, STARTING, RUNNING, STOPPING, EXITED, FAILED
+model WorkspaceBackgroundService {
+  id                String    @id @default(uuid())
+  workspaceId       String
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name              String
+  command           String
+  argsJson          String    @default("[]")
+  relativeCwd       String    @default(".")
+  desiredState      String    @default("STOPPED")
+  runtimeState      String    @default("STOPPED")
+  runtimeInstanceId String?
+  pid               Int?
+  exitCode          Int?
+  lastError         String?
+  startedAt         DateTime?
+  stoppedAt         DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, desiredState])
+  @@index([desiredState, runtimeState])
 }
 
 // 工作区审查/测试记录

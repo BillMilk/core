@@ -24,7 +24,12 @@ import {
   isMainDirectoryWorkspace,
 } from './workspace-kind.js';
 import { writeErrorLog } from '../utils/error-log.js';
-import { INTERNAL_API_TOKEN_ENV, readInternalApiTokenFromEnv } from '../utils/internal-api-token.js';
+import {
+  AGENT_API_CREDENTIAL_ENV,
+  clearAgentApiCredentials,
+  createAgentApiCredential,
+  revokeAgentApiCredential,
+} from '../utils/agent-api-credential.js';
 import { createHash } from 'node:crypto';
 import { RuntimeType, supportsAgentRuntime, type RuntimeStateDto } from '@agent-tower/shared';
 import { getProviderRuntimeType } from '../executors/providers.js';
@@ -33,11 +38,13 @@ import {
   AcpRuntimeDriver,
   RuntimeCoordinator,
   StaticRuntimeRegistry,
+  type RuntimeRegistry,
   setRuntimeStateSnapshot,
   type RuntimeResumeMode,
   type RuntimeProcessEvent,
   type RuntimeTurnEventEnvelope,
 } from '../runtime/index.js';
+import { buildWorkspaceRuntimePrompt } from '../prompts/workspace-background-service-policy.js';
 
 const DEBUG_SNAPSHOT = process.env.DEBUG_SNAPSHOT === 'true';
 
@@ -117,7 +124,11 @@ export class SessionManager {
   private static readonly SNAPSHOT_CHECKPOINT_MS = 15_000;
   private static readonly HEARTBEAT_THROTTLE_MS = 30_000;
 
-  constructor(private readonly eventBus: EventBus, teamReconciler?: TeamReconcilerService) {
+  constructor(
+    private readonly eventBus: EventBus,
+    teamReconciler?: TeamReconcilerService,
+    runtimeRegistry?: RuntimeRegistry,
+  ) {
     this.teamReconciler = teamReconciler ?? new TeamReconcilerService({
       eventBus,
       sessionMessenger: this,
@@ -126,7 +137,7 @@ export class SessionManager {
       scheduleReminders: false,
     });
     this.runtimeCoordinator = new RuntimeCoordinator(
-      new StaticRuntimeRegistry([
+      runtimeRegistry ?? new StaticRuntimeRegistry([
         new CliRuntimeDriver(),
         new AcpRuntimeDriver(),
       ]),
@@ -134,6 +145,7 @@ export class SessionManager {
         onTurnEvent: (event) => this.handleRuntimeTurnEvent(event),
         onRuntimeState: (state) => this.handleRuntimeState(state),
         onProcessEvent: (event) => this.handleRuntimeProcessEvent(event),
+        onDriverSessionDisposed: (sessionId) => revokeAgentApiCredential(sessionId),
       },
     );
 
@@ -439,29 +451,26 @@ export class SessionManager {
       if (!options.skipTeamRunReconcile && !this.isConversationSession(session)) {
         await this.teamReconciler.handleSessionStopped(id);
       }
+      revokeAgentApiCredential(id);
       return session;
     }
     this.terminalSessions.set(id, SessionStatus.CANCELLED);
 
-    const runtimeType = this.normalizeRuntimeType(session.runtimeType);
-    if (runtimeType === RuntimeType.ACP && hasActiveTurn) {
-      const canReuseDriverSession = await this.runtimeCoordinator.abandonTurn(id).catch((error) => {
+    if (this.normalizeRuntimeType(session.runtimeType) === RuntimeType.ACP && hasActiveTurn) {
+      await this.runtimeCoordinator.abandonTurn(id).catch((error) => {
         this.logSessionError('session.runtimeCancel', error, { sessionId: id });
         return false;
       });
-      if (!canReuseDriverSession) {
-        await this.runtimeCoordinator.disposeSession(id).catch((error) => {
-          this.logSessionError('session.runtimeDispose', error, { sessionId: id });
-        });
-      }
     } else {
       await this.runtimeCoordinator.cancelTurn(id).catch((error) => {
         this.logSessionError('session.runtimeCancel', error, { sessionId: id });
       });
-      await this.runtimeCoordinator.disposeSession(id).catch((error) => {
-        this.logSessionError('session.runtimeDispose', error, { sessionId: id });
-      });
     }
+    // Explicit stop revokes the DriverSession-bound workspace-service credential.
+    // A later follow-up reopens from the persisted external session id with a new credential.
+    await this.runtimeCoordinator.disposeSession(id).catch((error) => {
+      this.logSessionError('session.runtimeDispose', error, { sessionId: id });
+    });
 
     const msgStore = sessionMsgStoreManager.get(id);
     if (msgStore) {
@@ -490,6 +499,7 @@ export class SessionManager {
     // store after the CANCELLED snapshot has been persisted above.
     sessionMsgStoreManager.delete(id);
     this.releaseSnapshotPersistenceState(id);
+    revokeAgentApiCredential(id);
     return session;
   }
 
@@ -548,6 +558,7 @@ export class SessionManager {
     for (const release of [...this.followUpReservationReleases]) release();
     this.followUpReservationReleases.clear();
     this.followUpReservations.clear();
+    clearAgentApiCredentials();
   }
 
   private resolveAgentSessionId(sessionId: string, logSnapshot: string | null): string | null {
@@ -583,10 +594,10 @@ export class SessionManager {
         env.merge(filterAgentSubprocessExternalEnv(provider.env));
       }
     }
-    this.injectAgentTowerMcpServiceEnv(env);
     if (!this.isConversationSession(session)) {
       await this.injectTeamRunInvocationEnv(session.id, env);
     }
+    this.injectAgentTowerMcpServiceEnv(session.id, env);
 
     const isNewStore = !sessionMsgStoreManager.has(session.id);
     const msgStore = sessionMsgStoreManager.getOrCreate(session.id);
@@ -606,6 +617,7 @@ export class SessionManager {
         where: { id: session.id },
         data: { status: SessionStatus.RUNNING },
       });
+      const runtimePrompt = buildWorkspaceRuntimePrompt(session, prompt);
       const handle = await this.runtimeCoordinator.startTurn({
         towerSessionId: session.id,
         agentType: session.agentType as AgentType,
@@ -616,7 +628,7 @@ export class SessionManager {
         env,
         externalSessionId: session.externalSessionId,
         msgStore,
-        prompt,
+        prompt: runtimePrompt,
         resumeExternalSessionId,
         resumeMode,
       });
@@ -628,6 +640,7 @@ export class SessionManager {
       await this.checkTaskAutoRevert(session.id);
     } catch (error) {
       await this.runtimeCoordinator.disposeSession(session.id).catch(() => undefined);
+      revokeAgentApiCredential(session.id);
       await prisma.session.update({
         where: { id: session.id },
         data: { status: SessionStatus.CANCELLED },
@@ -780,17 +793,19 @@ export class SessionManager {
     return value === RuntimeType.ACP ? RuntimeType.ACP : RuntimeType.CLI;
   }
 
-  private injectAgentTowerMcpServiceEnv(env: ExecutionEnv): void {
-    const serviceEnv: Record<string, string> = {};
+  private injectAgentTowerMcpServiceEnv(sessionId: string, env: ExecutionEnv): void {
+    const serviceEnv: Record<string, string> = {
+      AGENT_TOWER_SESSION_ID: sessionId,
+    };
+    serviceEnv[AGENT_API_CREDENTIAL_ENV] = createAgentApiCredential({
+      sessionId,
+      invocationId: env.get('AGENT_TOWER_INVOCATION_ID') ?? null,
+    });
     if (process.env.AGENT_TOWER_URL) {
       serviceEnv.AGENT_TOWER_URL = process.env.AGENT_TOWER_URL;
     }
     if (process.env.AGENT_TOWER_PORT) {
       serviceEnv.AGENT_TOWER_PORT = process.env.AGENT_TOWER_PORT;
-    }
-    const internalToken = readInternalApiTokenFromEnv();
-    if (internalToken) {
-      serviceEnv[INTERNAL_API_TOKEN_ENV] = internalToken;
     }
     if (Object.keys(serviceEnv).length > 0) {
       env.merge(serviceEnv);
@@ -815,7 +830,6 @@ export class SessionManager {
     }
 
     env.merge({
-      AGENT_TOWER_SESSION_ID: sessionId,
       AGENT_TOWER_INVOCATION_ID: invocation.id,
       AGENT_TOWER_TEAM_RUN_ID: invocation.teamRunId,
       AGENT_TOWER_MEMBER_ID: invocation.memberId,

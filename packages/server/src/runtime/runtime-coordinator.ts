@@ -235,6 +235,7 @@ export class RuntimeCoordinator {
     session.activeTurn = undefined;
     session.turnState = 'DISPOSED';
     this.host.onRuntimeState(this.toState(towerSessionId, session));
+    this.host.onDriverSessionDisposed?.(towerSessionId);
     await session.driverSession.close();
   }
 

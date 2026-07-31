@@ -11,7 +11,12 @@ import { WorkspaceService } from './services/workspace.service.js';
 import { HibernationScheduler } from './services/hibernation-scheduler.js';
 import { MemberHeartbeatScheduler } from './services/member-heartbeat-scheduler.js';
 import { TunnelService } from './services/tunnel.service.js';
-import { getEventBus, getSessionManager, getTaskCleanupService } from './core/container.js';
+import {
+  getEventBus,
+  getSessionManager,
+  getTaskCleanupService,
+  getWorkspaceBackgroundService,
+} from './core/container.js';
 import { tunnelAuthHook } from './middleware/tunnel-auth.js';
 import { accessAuthHook } from './middleware/access-auth.js';
 import { writeErrorLog } from './utils/error-log.js';
@@ -98,6 +103,10 @@ export async function buildApp() {
     await initializeSocket(app);
     app.log.info(`[startup:onReady] initializeSocket done elapsed=${elapsed()}`);
 
+    app.log.info(`[startup:onReady] workspaceBackgroundService reconcile start elapsed=${elapsed()}`);
+    await getWorkspaceBackgroundService().reconcile();
+    app.log.info(`[startup:onReady] workspaceBackgroundService reconcile done elapsed=${elapsed()}`);
+
     // 启动时清理过期 worktree 引用
     app.log.info(`[startup:onReady] pruneAllWorktrees schedule start elapsed=${elapsed()}`);
     WorkspaceService.pruneAllWorktrees().catch((err) => {
@@ -134,7 +143,11 @@ export async function buildApp() {
     memberHeartbeatScheduler?.stop();
     getTaskCleanupService().stop();
     TunnelService.stop();
-    await closeSocket();
+    try {
+      await getWorkspaceBackgroundService().shutdown();
+    } finally {
+      await closeSocket();
+    }
   });
 
   return app;

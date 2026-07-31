@@ -35,6 +35,7 @@ export const AGENT_TOWER_MCP_IDENTITY_ENV_KEYS = [
 export const AGENT_TOWER_MCP_SERVICE_ENV_KEYS = [
   'AGENT_TOWER_URL',
   'AGENT_TOWER_PORT',
+  'AGENT_TOWER_AGENT_CREDENTIAL',
   'AGENT_TOWER_INTERNAL_TOKEN',
 ] as const;
 
@@ -49,6 +50,7 @@ export function isAgentSubprocessProtectedEnvKey(key: string): boolean {
 }
 
 const AGENT_SUBPROCESS_PARENT_ONLY_BLOCKED_ENV_KEYS = [
+  'AGENT_TOWER_AGENT_CREDENTIAL',
   'AGENT_TOWER_INTERNAL_TOKEN',
 ] as const;
 

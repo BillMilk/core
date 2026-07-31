@@ -4,6 +4,7 @@ import { CommitMessageService } from '../services/commit-message.service.js';
 import { NotificationService } from '../services/notifications/index.js';
 import { TaskCleanupService } from '../services/task-cleanup.service.js';
 import { AgentCliEnvironmentService } from '../services/agent-cli/environment.service.js';
+import { WorkspaceBackgroundService } from '../services/workspace-background-service.service.js';
 import { prisma } from '../utils/index.js';
 // TerminalManager is lazy-imported to avoid eager native module (node-pty) loading
 // that could break getEventBus()/getSessionManager() if the import fails.
@@ -16,6 +17,7 @@ let commitMessageService: CommitMessageService | null = null;
 let notificationService: NotificationService | null = null;
 let taskCleanupService: TaskCleanupService | null = null;
 let agentCliEnvironmentService: AgentCliEnvironmentService | null = null;
+let workspaceBackgroundService: WorkspaceBackgroundService | null = null;
 
 export function getEventBus(): EventBus {
   if (!eventBus) {
@@ -40,9 +42,16 @@ export function getCommitMessageService(): CommitMessageService {
 
 export function getTaskCleanupService(): TaskCleanupService {
   if (!taskCleanupService) {
-    taskCleanupService = new TaskCleanupService(getSessionManager());
+    taskCleanupService = new TaskCleanupService(getSessionManager(), getWorkspaceBackgroundService());
   }
   return taskCleanupService;
+}
+
+export function getWorkspaceBackgroundService(): WorkspaceBackgroundService {
+  if (!workspaceBackgroundService) {
+    workspaceBackgroundService = new WorkspaceBackgroundService();
+  }
+  return workspaceBackgroundService;
 }
 
 export async function getTerminalManager(): Promise<TerminalManager> {

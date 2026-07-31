@@ -20,6 +20,7 @@ import { teamRunRoutes } from './team-runs.js';
 import { previewRoutes } from './previews.js';
 import { conversationRoutes } from './conversations.js';
 import { agentCliEnvironmentRoutes } from './agent-cli-environment.js';
+import { workspaceServiceRoutes } from './workspace-services.js';
 
 export async function registerRoutes(app: FastifyInstance) {
   // 系统路由
@@ -33,6 +34,9 @@ export async function registerRoutes(app: FastifyInstance) {
 
   // 工作空间路由
   await app.register(workspaceRoutes, { prefix: '/api' });
+
+  // Workspace-owned long-running services
+  await app.register(workspaceServiceRoutes, { prefix: '/api' });
 
   // 会话路由
   await app.register(sessionRoutes, { prefix: '/api' });

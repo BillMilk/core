@@ -1,10 +1,23 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { AccessAuthService } from '../services/access-auth.service.js';
 import {
+  INTERNAL_API_INVOCATION_ID_HEADER,
+  INTERNAL_API_SESSION_ID_HEADER,
   INTERNAL_API_TOKEN_HEADER,
   validateInternalApiToken,
 } from '../utils/internal-api-token.js';
 import { parsePreviewPath } from '../utils/preview-path.js';
+import {
+  AGENT_API_CREDENTIAL_HEADER,
+  type AgentApiCredentialIdentity,
+  validateAgentApiCredential,
+} from '../utils/agent-api-credential.js';
+declare module 'fastify' {
+  interface FastifyRequest {
+    agentTowerAuthKind?: 'unauthenticated' | 'browser' | 'agent' | 'internal';
+    agentTowerAgentIdentity?: AgentApiCredentialIdentity;
+  }
+}
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -82,6 +95,26 @@ function sendInvalidInternalToken(reply: FastifyReply): void {
   });
 }
 
+function sendInvalidAgentCredential(reply: FastifyReply): void {
+  reply.code(401).send({
+    error: 'Unauthorized',
+    code: 'ACCESS_AUTH_INVALID_AGENT_CREDENTIAL',
+    message: 'Invalid Agent credential',
+  });
+}
+
+function hasConflictingAgentIdentity(
+  request: FastifyRequest,
+  identity: AgentApiCredentialIdentity,
+): boolean {
+  const sessionId = firstHeaderValue(request.headers[INTERNAL_API_SESSION_ID_HEADER]);
+  const invocationId = firstHeaderValue(request.headers[INTERNAL_API_INVOCATION_ID_HEADER]);
+  return Boolean(
+    (sessionId && sessionId !== identity.sessionId)
+    || (invocationId && invocationId !== identity.invocationId),
+  );
+}
+
 function sendCsrfRejected(reply: FastifyReply): void {
   reply.code(403).send({
     error: 'Forbidden',
@@ -94,28 +127,59 @@ export async function accessAuthHook(
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<void> {
+  request.agentTowerAuthKind = 'unauthenticated';
   if (!isProtectedEndpoint(request) || isPublicEndpoint(request)) return;
+
+  const agentCredential = firstHeaderValue(request.headers[AGENT_API_CREDENTIAL_HEADER]);
+  if (agentCredential) {
+    const identity = validateAgentApiCredential(agentCredential);
+    if (!identity || hasConflictingAgentIdentity(request, identity)) {
+      sendInvalidAgentCredential(reply);
+      return;
+    }
+    request.headers[INTERNAL_API_SESSION_ID_HEADER] = identity.sessionId;
+    if (identity.invocationId) {
+      request.headers[INTERNAL_API_INVOCATION_ID_HEADER] = identity.invocationId;
+    } else {
+      delete request.headers[INTERNAL_API_INVOCATION_ID_HEADER];
+    }
+    request.agentTowerAuthKind = 'agent';
+    request.agentTowerAgentIdentity = identity;
+    return;
+  }
 
   const internalToken = firstHeaderValue(request.headers[INTERNAL_API_TOKEN_HEADER]);
   if (internalToken) {
-    if (validateInternalApiToken(internalToken)) return;
+    if (validateInternalApiToken(internalToken)) {
+      request.agentTowerAuthKind = 'internal';
+      return;
+    }
     sendInvalidInternalToken(reply);
     return;
   }
 
-  if (!await AccessAuthService.isEnabled()) return;
-
-  if (await hasValidPreviewAccessToken(request)) return;
+  if (await hasValidPreviewAccessToken(request)) {
+    request.agentTowerAuthKind = 'browser';
+    return;
+  }
 
   const cookieToken = request.cookies[AccessAuthService.cookieName]
     ?? AccessAuthService.extractCookieFromHeader(request.headers.cookie);
+
+  if (await AccessAuthService.validateBrowserSessionToken(cookieToken)) {
+    request.agentTowerAuthKind = 'browser';
+    if (shouldCheckCsrf(request) && !hasValidSameOriginSignal(request)) {
+      sendCsrfRejected(reply);
+    }
+    return;
+  }
+
+  if (!await AccessAuthService.isEnabled()) return;
 
   if (!await AccessAuthService.validateSessionToken(cookieToken)) {
     sendUnauthorized(reply);
     return;
   }
 
-  if (shouldCheckCsrf(request) && !hasValidSameOriginSignal(request)) {
-    sendCsrfRejected(reply);
-  }
+  request.agentTowerAuthKind = 'browser';
 }

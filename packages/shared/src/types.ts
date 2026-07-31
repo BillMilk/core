@@ -569,6 +569,74 @@ export interface Workspace {
   updatedAt?: string
 }
 
+export type WorkspaceBackgroundServiceDesiredState = 'RUNNING' | 'STOPPED'
+
+export type WorkspaceBackgroundServiceRuntimeState =
+  | 'STOPPED'
+  | 'STARTING'
+  | 'RUNNING'
+  | 'STOPPING'
+  | 'EXITED'
+  | 'FAILED'
+
+/** Workspace-owned long-running process definition and current runtime state. */
+export interface WorkspaceBackgroundServiceDto {
+  id: string
+  workspaceId: string
+  name: string
+  command: string
+  args: string[]
+  relativeCwd: string
+  desiredState: WorkspaceBackgroundServiceDesiredState
+  runtimeState: WorkspaceBackgroundServiceRuntimeState
+  runtimeInstanceId: string | null
+  pid: number | null
+  exitCode: number | null
+  lastError: string | null
+  startedAt: string | null
+  stoppedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface WorkspaceBackgroundServicesResponse {
+  services: WorkspaceBackgroundServiceDto[]
+}
+
+export interface StartWorkspaceBackgroundServiceInput {
+  command: string
+  args?: string[]
+  relativeCwd?: string
+}
+
+export interface WorkspaceBackgroundServiceLogEntry {
+  seq: number
+  timestamp: string
+  data: string
+}
+
+export interface WorkspaceBackgroundServiceLogsResponse {
+  serviceName: string
+  runtimeState: WorkspaceBackgroundServiceRuntimeState
+  /** Runtime generation that owns these log sequence numbers. */
+  runtimeInstanceId: string | null
+  entries: WorkspaceBackgroundServiceLogEntry[]
+  oldestSeq: number
+  nextSeq: number
+  /** True when the requested generation or cursor no longer matches the current log buffer. */
+  reset: boolean
+  /** True when older entries were discarded or omitted and cannot be recovered with forward pagination. */
+  truncated: boolean
+  /** True when another forward page is immediately available. */
+  hasMore: boolean
+}
+
+export interface WorkspaceBackgroundServiceInputResponse {
+  serviceName: string
+  accepted: true
+  byteLength: number
+}
+
 export type PreviewSessionMode = 'local' | 'remote'
 
 export interface PreviewStatus {
@@ -623,6 +691,7 @@ export type MergeReadinessBlockerCode =
   | 'REVIEW_STALE'
   | 'SELF_REVIEW_FORBIDDEN'
   | 'OWNER_HAS_ACTIVE_INVOCATION'
+  | 'WORKSPACE_HAS_ACTIVE_SERVICE'
   | 'PARENT_WORKSPACE_HAS_ACTIVE_SESSION'
   | 'WORKTREE_DIRTY'
   | 'REBASE_IN_PROGRESS'

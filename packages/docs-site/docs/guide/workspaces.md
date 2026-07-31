@@ -79,6 +79,14 @@ Session Log 或 Team Room 消息中的 localhost 链接也会打开对应 worksp
 
 预览目标只允许 `localhost`、`127.0.0.1`、`::1` 等 loopback 地址，不能指向任意外部主机。Preview 面向已登录用户主动打开的可信本地开发服务；为保证应用可以完整运行，预览页拥有脚本和同源能力，不要打开不可信的本地页面。
 
+## 后台服务
+
+需要跨 Agent turn 持续运行的开发服务器、watcher 或 worker 由 Workspace 作为后台服务托管。Agent Session、CLI/ACP 或页面 Socket 结束不会停止它们；Workspace 休眠、归档、删除或显式服务停止仍会清理对应进程树。
+
+Workspace 的 Terminal 标签页分为“交互终端”和“后台服务”。后台服务列表显示服务名、运行状态、结构化命令、相对工作目录和启动时间；选择服务后可以查看有界日志。当前 Web UI 是只读视图，不提供输入、停止、重启或关闭服务按钮，普通交互终端的关闭行为保持不变。
+
+日志通过 runtime generation 与 seq 游标增量加载。页面会在服务重启或 Agent Tower 重启导致 generation 变化时丢弃旧缓存，并从新 generation 重新显示；只有 generation/reset、较早内容被有界 buffer 截断或浏览器本地裁剪时才提示较早日志不可用，正常分页追平不会显示该提示。
+
 ## 休眠与恢复
 
 空闲 workspace 可以休眠，以减少本地工作区堆积。需要继续任务时，可以 reactivate，把 workspace 恢复为可操作状态。

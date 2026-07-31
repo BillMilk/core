@@ -5,7 +5,7 @@ description: 让外部 agent 直接操作 Agent Tower。
 
 # MCP 集成
 
-Agent Tower 内置 MCP server，让外部 AI agent 可以直接读取任务板、启动 workspace session、查看 diff，以及继续与已有 session 交互。
+Agent Tower 内置 MCP server，让外部 AI agent 可以直接读取任务板、启动 workspace session、管理 workspace 后台服务、查看 diff，以及继续与已有 session 交互。
 
 如果你要在 TeamRun 中使用 Team Room、私聊或 WorkRequest 控制工具，还需要确保每个 Agent CLI 都配置了 Agent Tower MCP server。具体见 [团队模式](../guide/team-mode.md)。
 
@@ -25,7 +25,7 @@ Agent Tower Backend
 
 MCP server 只是轻量 HTTP 代理层，不直接访问数据库，也不绕过业务规则。
 
-如果启用了访问密码，MCP 不能使用浏览器 cookie。Agent Tower 会为自己启动的 agent/MCP 进程注入 `AGENT_TOWER_INTERNAL_TOKEN`，MCP 调后端 API 时会使用这个内部凭证。手动配置第三方 MCP 客户端时，推荐从设置页复制生成的 MCP 配置；如果手写配置，需要包含 `AGENT_TOWER_INTERNAL_TOKEN` env，占位符形式如下，不要写死真实 token。
+如果启用了访问密码，MCP 不能使用浏览器 cookie。Agent Tower 会为自己启动的 agent/MCP 进程签发只绑定当前 session/invocation 的 `AGENT_TOWER_AGENT_CREDENTIAL`，不会把应用级 internal token 暴露给托管 Agent。手动配置第三方 MCP 客户端时，推荐从设置页复制生成的 MCP 配置；如果手写配置，需要包含 `AGENT_TOWER_INTERNAL_TOKEN` env，占位符形式如下，不要写死真实 token。
 
 ## 前置条件
 
@@ -113,6 +113,26 @@ pnpm --filter @agent-tower/server dev
 | `get_workspace_diff` | 获取 workspace 当前 diff |
 | `merge_workspace` | 将 workspace squash merge 回主分支 |
 
+### Workspace 后台服务
+
+以下工具只在 MCP 进程绑定了当前 workspace 时注册，用于运行需要跨 Agent turn 持续存在的开发服务器、watcher 或 worker：
+
+| Tool | 说明 |
+| --- | --- |
+| `start_workspace_service` | 用稳定名称和结构化 `command`、`args` 启动长期服务，可指定 workspace 内的相对目录 |
+| `list_workspace_services` | 列出当前 workspace 的服务定义、期望状态和运行状态 |
+| `get_workspace_service_logs` | 按 `runtime_instance_id` 与 `after_seq` 游标读取有界的内存日志 |
+| `send_workspace_service_input` | 向运行中的服务 PTY 写入输入 |
+| `control_workspace_service` | 使用 `stop` 或 `restart` 控制已有服务 |
+
+后台服务由 workspace 持有，不属于启动它的 Agent session，因此 session 完成、停止或页面断开不会结束服务。普通构建、测试和一次性命令仍使用 Agent 终端；不要用 `nohup`、`disown` 或 shell 后台任务代替这些工具。
+
+后台服务工具要求 Agent Tower 签发的 workspace session credential。Solo session 绑定当前 workspace；TeamRun session 还绑定 invocation，并在每次请求重验成员的 `runCommands` capability。同一个 DriverSession 在自然完成后的 follow-up 中继续使用有效 credential；显式停止 Session、启动失败或关闭 DriverSession 后 credential 立即失效。缺少 credential 的 Agent 请求和与 credential 冲突的自报 identity 都会被拒绝。
+
+当前 Web UI 和浏览器 REST 只开放只读能力：同源且通过 AccessAuth 的请求可以列出 workspace service 并读取有界日志。启动、更新、输入、停止或重启仍只允许 Agent/MCP/internal；即使请求携带 access-auth 签发的有效浏览器 cookie，或自报 session/invocation/internal identity，也不能换取控制权限。
+
+启动参数不接受 shell 命令字符串、绝对工作目录或自定义环境变量。项目继续通过自己的 `.env` 和启动脚本加载配置。服务崩溃后不会自动重启；workspace 休眠、归档或删除时会停止服务并清除期望运行状态，之后唤醒不会自动恢复。日志仅保存在当前 Agent Tower 进程的有界内存中，应用重启后不会保留。
+
 ### Sessions
 
 | Tool | 说明 |
@@ -130,13 +150,13 @@ pnpm --filter @agent-tower/server dev
 
 Team Room 工具始终在 MCP server 中注册，但大多数工具需要当前 MCP 进程带有 TeamRun 身份。TeamRun 由 Agent Tower 启动 agent session 时注入：
 
-- `AGENT_TOWER_INTERNAL_TOKEN`
+- `AGENT_TOWER_AGENT_CREDENTIAL`
 - `AGENT_TOWER_TEAM_RUN_ID`
 - `AGENT_TOWER_MEMBER_ID`
 - `AGENT_TOWER_INVOCATION_ID`
 - `AGENT_TOWER_SESSION_ID`
 
-其中 `AGENT_TOWER_INTERNAL_TOKEN` 用于 MCP 后端鉴权；其余变量用于 TeamRun 成员身份和上下文。不要在共享配置中写死这些值。
+其中 `AGENT_TOWER_AGENT_CREDENTIAL` 是后端签发并绑定当前 session/invocation 的 MCP 凭据；其余变量提供 TeamRun 上下文，后端会拒绝与 credential 绑定不一致的身份。不要在共享配置中写死这些值。`AGENT_TOWER_INTERNAL_TOKEN` 只用于应用级内部进程或手动配置的可信 MCP 客户端。
 
 | Tool | 说明 |
 | --- | --- |

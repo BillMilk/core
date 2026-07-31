@@ -3,7 +3,12 @@ import { z, ZodError } from 'zod';
 import { TaskService } from '../services/task.service.js';
 import { TaskStatus } from '../types/index.js';
 import { ServiceError } from '../errors.js';
-import { getEventBus, getSessionManager, getTaskCleanupService } from '../core/container.js';
+import {
+  getEventBus,
+  getSessionManager,
+  getTaskCleanupService,
+  getWorkspaceBackgroundService,
+} from '../core/container.js';
 
 const createTaskSchema = z.object({
   title: z.string().min(1, 'title is required').refine((value) => value.trim().length > 0, 'title is required'),
@@ -66,7 +71,12 @@ function handleError(error: unknown, reply: any) {
 }
 
 export async function taskRoutes(app: FastifyInstance) {
-  const taskService = new TaskService(getEventBus(), getSessionManager(), getTaskCleanupService());
+  const taskService = new TaskService(
+    getEventBus(),
+    getSessionManager(),
+    getTaskCleanupService(),
+    getWorkspaceBackgroundService(),
+  );
 
   app.get('/task-board', async (request, reply) => {
     try {

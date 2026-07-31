@@ -6,9 +6,10 @@ import { TerminalTabs } from '../TerminalTabs'
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const { pasteMock, sendInputMock, toastErrorMock, toastSuccessMock } = vi.hoisted(() => ({
+const { pasteMock, sendInputMock, terminalUnmountMock, toastErrorMock, toastSuccessMock } = vi.hoisted(() => ({
   pasteMock: vi.fn(),
   sendInputMock: vi.fn(),
+  terminalUnmountMock: vi.fn(),
   toastErrorMock: vi.fn(),
   toastSuccessMock: vi.fn(),
 }))
@@ -21,13 +22,17 @@ vi.mock('../StandaloneTerminalView', async () => {
     }) => {
       ReactModule.useEffect(() => {
         onReady?.({ paste: pasteMock, sendInput: sendInputMock })
-      }, [onReady])
+        return terminalUnmountMock
+      }, [])
       return ReactModule.createElement('div', { 'data-testid': 'terminal' })
     },
   }
 })
 
 vi.mock('../QuickCommandsPopover', () => ({ QuickCommandsPopover: () => null }))
+vi.mock('../WorkspaceBackgroundServices', () => ({
+  WorkspaceBackgroundServices: () => <div data-testid="background-services" />,
+}))
 vi.mock('@/lib/i18n', () => ({ useI18n: () => ({ t: (value: string) => value }) }))
 vi.mock('sonner', () => ({
   toast: {
@@ -44,6 +49,7 @@ describe('TerminalTabs mobile paste control', () => {
   beforeEach(async () => {
     pasteMock.mockReset()
     sendInputMock.mockReset()
+    terminalUnmountMock.mockReset()
     toastErrorMock.mockReset()
     toastSuccessMock.mockReset()
     originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
@@ -135,5 +141,20 @@ describe('TerminalTabs mobile paste control', () => {
 
     expect(pasteMock).toHaveBeenCalledWith('pwd')
     expect(toastErrorMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps interactive terminals mounted while viewing workspace background services', async () => {
+    await act(async () => {
+      root.render(<TerminalTabs workspaceId="workspace-1" />)
+    })
+    terminalUnmountMock.mockClear()
+
+    const servicesButton = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent === 'Background services')
+    await act(async () => servicesButton?.click())
+
+    expect(container.querySelector('[data-testid="background-services"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="terminal"]')).not.toBeNull()
+    expect(terminalUnmountMock).not.toHaveBeenCalled()
   })
 })

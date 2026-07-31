@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from "react"
-import { ClipboardPaste, Loader2, Plus, Terminal, X } from "lucide-react"
+import { ClipboardPaste, Loader2, Plus, Server, Terminal, X } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { useI18n } from "@/lib/i18n"
@@ -10,6 +10,7 @@ import {
   type StandaloneTerminalApi,
 } from "./StandaloneTerminalView"
 import { QuickCommandsPopover } from "./QuickCommandsPopover"
+import { WorkspaceBackgroundServices } from "./WorkspaceBackgroundServices"
 import type { QuickCommand } from "@agent-tower/shared"
 
 // ============================================================
@@ -26,6 +27,8 @@ export interface TerminalTabsProps {
   cwd?: string
   /** Whether this TerminalTabs container is currently visible */
   isVisible?: boolean
+  /** Workspace scope for read-only background services */
+  workspaceId?: string
   /** Quick commands from project config */
   quickCommands?: QuickCommand[]
 }
@@ -49,7 +52,7 @@ function nextTab(): TerminalTab {
 // ============================================================
 
 export const TerminalTabs: React.FC<TerminalTabsProps> = React.memo(
-  function TerminalTabs({ cwd, isVisible = true, quickCommands = [] }) {
+  function TerminalTabs({ cwd, isVisible = true, workspaceId, quickCommands = [] }) {
     const { t } = useI18n()
     // Start with one terminal tab by default
     const [tabs, setTabs] = useState<TerminalTab[]>(() => {
@@ -61,7 +64,9 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = React.memo(
     const [isPasteSheetOpen, setIsPasteSheetOpen] = useState(false)
     const [pasteDraft, setPasteDraft] = useState("")
     const [pasteTargetTabId, setPasteTargetTabId] = useState<string | null>(null)
+    const [activeView, setActiveView] = useState<'terminals' | 'services'>('terminals')
     const terminalApiMapRef = useRef<Map<string, StandaloneTerminalApi>>(new Map())
+    const visibleView = workspaceId ? activeView : 'terminals'
 
     const removeTerminalApi = useCallback((tabId: string) => {
       terminalApiMapRef.current.delete(tabId)
@@ -185,109 +190,156 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = React.memo(
 
     return (
       <div className="flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden bg-[#1e1e1e]">
-        {/* Terminal sub-tab bar */}
-        <div className="flex items-center bg-[#252526] border-b border-[#333] shrink-0 select-none">
-          <div className="flex items-center overflow-x-auto scrollbar-app-thin flex-1 min-w-0">
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTabId(tab.id)}
-                className={cn(
-                  "flex items-center gap-1.5 px-3 py-1.5 text-[11px] border-r border-[#333] whitespace-nowrap group transition-colors",
-                  tab.id === activeTabId
-                    ? "bg-[#1e1e1e] text-neutral-200"
-                    : "bg-[#2d2d2d] text-neutral-500 hover:text-neutral-300"
-                )}
-              >
-                <Terminal size={11} className="shrink-0" />
-                <span>{t('Shell {count}', { count: tab.order })}</span>
-                {tabs.length > 1 && (
-                  <span
-                    onClick={(e) => handleCloseTab(tab.id, e)}
-                    className="ml-1 p-0.5 rounded hover:bg-[#444] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-                  >
-                    <X size={10} />
-                  </span>
-                )}
-              </button>
-            ))}
+        {workspaceId && (
+          <div className="flex h-10 shrink-0 items-center gap-1 border-b border-[#343434] bg-[#202020] px-2 select-none">
+            <button
+              type="button"
+              onClick={() => setActiveView('terminals')}
+              aria-pressed={visibleView === 'terminals'}
+              className={cn(
+                'flex h-7 items-center gap-1.5 rounded px-2.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400',
+                visibleView === 'terminals'
+                  ? 'bg-[#3a3a3a] text-neutral-100'
+                  : 'text-neutral-500 hover:bg-[#2d2d2d] hover:text-neutral-300',
+              )}
+            >
+              <Terminal size={12} aria-hidden="true" />
+              {t('Interactive terminals')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveView('services')}
+              aria-pressed={visibleView === 'services'}
+              className={cn(
+                'flex h-7 items-center gap-1.5 rounded px-2.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400',
+                visibleView === 'services'
+                  ? 'bg-[#3a3a3a] text-neutral-100'
+                  : 'text-neutral-500 hover:bg-[#2d2d2d] hover:text-neutral-300',
+              )}
+            >
+              <Server size={12} aria-hidden="true" />
+              {t('Background services')}
+            </button>
+          </div>
+        )}
+
+        <div
+          aria-hidden={visibleView !== 'terminals'}
+          className={cn(
+            'min-h-0 flex-1 flex-col',
+            visibleView === 'terminals' ? 'flex' : 'hidden',
+          )}
+        >
+          {/* Terminal sub-tab bar */}
+          <div className="flex items-center bg-[#252526] border-b border-[#333] shrink-0 select-none">
+            <div className="flex items-center overflow-x-auto scrollbar-app-thin flex-1 min-w-0">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTabId(tab.id)}
+                  className={cn(
+                    "flex items-center gap-1.5 px-3 py-1.5 text-[11px] border-r border-[#333] whitespace-nowrap group transition-colors",
+                    tab.id === activeTabId
+                      ? "bg-[#1e1e1e] text-neutral-200"
+                      : "bg-[#2d2d2d] text-neutral-500 hover:text-neutral-300"
+                  )}
+                >
+                  <Terminal size={11} className="shrink-0" />
+                  <span>{t('Shell {count}', { count: tab.order })}</span>
+                  {tabs.length > 1 && (
+                    <span
+                      onClick={(e) => handleCloseTab(tab.id, e)}
+                      className="ml-1 p-0.5 rounded hover:bg-[#444] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                    >
+                      <X size={10} />
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            {tabs.length > 0 && (
+              <>
+                <span className="mx-0.5 block h-5 w-px shrink-0 bg-[#3a3a3a] md:hidden" aria-hidden="true" />
+                <button
+                  type="button"
+                  onClick={handlePasteClick}
+                  disabled={!isActiveTerminalReady || isReadingClipboard}
+                  className="flex h-11 w-11 shrink-0 items-center justify-center text-neutral-400 transition-colors hover:bg-[#333] hover:text-neutral-100 active:bg-[#3a3a3a] disabled:cursor-not-allowed disabled:opacity-40 md:hidden"
+                  title={t("Paste into terminal")}
+                  aria-label={t("Paste into terminal")}
+                >
+                  {isReadingClipboard
+                    ? <Loader2 size={18} className="animate-spin" />
+                    : <ClipboardPaste size={18} />}
+                </button>
+              </>
+            )}
+
+            {/* Add terminal button */}
+            <button
+              type="button"
+              onClick={handleAddTab}
+              className="flex h-11 w-11 shrink-0 items-center justify-center text-neutral-500 transition-colors hover:bg-[#333] hover:text-neutral-300 active:bg-[#3a3a3a] md:h-auto md:w-auto md:px-2 md:py-1.5"
+              title={t('New Terminal')}
+              aria-label={t('New Terminal')}
+            >
+              <Plus size={14} />
+            </button>
+
+            {/* Quick commands button */}
+            {quickCommands.length > 0 && (
+              <QuickCommandsPopover
+                commands={quickCommands}
+                onSelect={handleQuickCommand}
+              />
+            )}
           </div>
 
-          {tabs.length > 0 && (
-            <>
-              <span className="mx-0.5 block h-5 w-px shrink-0 bg-[#3a3a3a] md:hidden" aria-hidden="true" />
-              <button
-                type="button"
-                onClick={handlePasteClick}
-                disabled={!isActiveTerminalReady || isReadingClipboard}
-                className="flex h-11 w-11 shrink-0 items-center justify-center text-neutral-400 transition-colors hover:bg-[#333] hover:text-neutral-100 active:bg-[#3a3a3a] disabled:cursor-not-allowed disabled:opacity-40 md:hidden"
-                title={t("Paste into terminal")}
-                aria-label={t("Paste into terminal")}
-              >
-                {isReadingClipboard
-                  ? <Loader2 size={18} className="animate-spin" />
-                  : <ClipboardPaste size={18} />}
-              </button>
-            </>
-          )}
-
-          {/* Add terminal button */}
-          <button
-            type="button"
-            onClick={handleAddTab}
-            className="flex h-11 w-11 shrink-0 items-center justify-center text-neutral-500 transition-colors hover:bg-[#333] hover:text-neutral-300 active:bg-[#3a3a3a] md:h-auto md:w-auto md:px-2 md:py-1.5"
-            title={t('New Terminal')}
-            aria-label={t('New Terminal')}
-          >
-            <Plus size={14} />
-          </button>
-
-          {/* Quick commands button */}
-          {quickCommands.length > 0 && (
-            <QuickCommandsPopover
-              commands={quickCommands}
-              onSelect={handleQuickCommand}
-            />
-          )}
-        </div>
-
-        {/* Terminal content area */}
-        <div className="flex-1 min-h-0 min-w-0 overflow-hidden relative">
-          {tabs.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center h-full text-neutral-500">
-              <div className="flex flex-col items-center gap-2">
-                <Terminal size={28} />
-                <span className="text-xs">{t('No terminals open')}</span>
-                <button
-                  onClick={handleAddTab}
-                  className="mt-1 px-3 py-1 text-xs bg-[#333] hover:bg-[#444] rounded transition-colors text-neutral-300"
+          {/* Terminal content area */}
+          <div className="flex-1 min-h-0 min-w-0 overflow-hidden relative">
+            {tabs.length === 0 ? (
+              <div className="flex-1 flex items-center justify-center h-full text-neutral-500">
+                <div className="flex flex-col items-center gap-2">
+                  <Terminal size={28} />
+                  <span className="text-xs">{t('No terminals open')}</span>
+                  <button
+                    onClick={handleAddTab}
+                    className="mt-1 px-3 py-1 text-xs bg-[#333] hover:bg-[#444] rounded transition-colors text-neutral-300"
+                  >
+                    {t('New Terminal')}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              tabs.map((tab) => (
+                <div
+                  key={tab.id}
+                  aria-hidden={tab.id !== activeTabId}
+                  className={cn(
+                    "absolute inset-0 h-full w-full min-h-0 min-w-0 overflow-hidden",
+                    tab.id === activeTabId
+                      ? "visible pointer-events-auto"
+                      : "invisible pointer-events-none"
+                  )}
                 >
-                  {t('New Terminal')}
-                </button>
-              </div>
-            </div>
-          ) : (
-            tabs.map((tab) => (
-              <div
-                key={tab.id}
-                aria-hidden={tab.id !== activeTabId}
-                className={cn(
-                  "absolute inset-0 h-full w-full min-h-0 min-w-0 overflow-hidden",
-                  tab.id === activeTabId
-                    ? "visible pointer-events-auto"
-                    : "invisible pointer-events-none"
-                )}
-              >
-                <StandaloneTerminalView
-                  cwd={cwd}
-                  isVisible={isVisible && tab.id === activeTabId}
-                  onExit={() => handleTerminalExit(tab.id)}
-                  onReady={(api) => handleTerminalReady(tab.id, api)}
-                />
-              </div>
-            ))
-          )}
+                  <StandaloneTerminalView
+                    cwd={cwd}
+                    isVisible={isVisible && visibleView === 'terminals' && tab.id === activeTabId}
+                    onExit={() => handleTerminalExit(tab.id)}
+                    onReady={(api) => handleTerminalReady(tab.id, api)}
+                  />
+                </div>
+              ))
+            )}
+          </div>
         </div>
+
+        {workspaceId && visibleView === 'services' && (
+          <div className="min-h-0 flex-1">
+            <WorkspaceBackgroundServices workspaceId={workspaceId} enabled={isVisible} />
+          </div>
+        )}
 
         <Modal
           isOpen={isPasteSheetOpen}

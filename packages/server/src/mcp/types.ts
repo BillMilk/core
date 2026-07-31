@@ -88,6 +88,41 @@ export const ReportTestResultInput = z.object({
   reason: z.string().optional().describe('Optional test report summary'),
 });
 
+// ── Workspace background services (workspace-context only) ──
+
+export const StartWorkspaceServiceInput = z.object({
+  service_name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/)
+    .describe('Stable name for the service within the current workspace.'),
+  command: z.string().min(1).max(512)
+    .describe('Executable name only. Pass arguments separately; do not provide a shell command string.'),
+  args: z.array(z.string().max(8_192)).max(100).optional()
+    .describe('Structured executable arguments.'),
+  relative_cwd: z.string().max(1_024).optional()
+    .describe('Directory relative to the current workspace. Defaults to ".".'),
+}).strict();
+
+export const ListWorkspaceServicesInput = z.object({}).strict();
+
+export const GetWorkspaceServiceLogsInput = z.object({
+  service_name: z.string().min(1),
+  runtime_instance_id: z.string().min(1).max(128).optional()
+    .describe('Expected runtime generation from the previous log response. Omit for the first read.'),
+  after_seq: z.number().int().min(0).optional()
+    .describe('Return entries with a sequence greater than this cursor. Omit to return the latest entries.'),
+  limit: z.number().int().min(1).max(200).optional(),
+}).strict();
+
+export const SendWorkspaceServiceInput = z.object({
+  service_name: z.string().min(1),
+  data: z.string().min(1).max(8_192)
+    .describe('UTF-8 input written as-is. Include a newline explicitly when required.'),
+}).strict();
+
+export const ControlWorkspaceServiceInput = z.object({
+  service_name: z.string().min(1),
+  action: z.enum(['stop', 'restart']),
+}).strict();
+
 // ── Sessions ──
 
 export const StopSessionInput = z.object({

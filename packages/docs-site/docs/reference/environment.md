@@ -15,7 +15,8 @@ description: 当前代码中实际使用的环境变量。
 | `AGENT_TOWER_PREVIEW_FORCE_TUNNEL` | 设为 `true` 时，Preview 即使从 HTTP 页面打开也使用独立 Quick Tunnel；Docker 默认启用，因为容器的动态 gateway 端口未直接暴露 |
 | `AGENT_TOWER_PORT` | CLI 或 MCP 使用的端口 |
 | `AGENT_TOWER_URL` | MCP 和子进程连接后端时使用的基础地址 |
-| `AGENT_TOWER_INTERNAL_TOKEN` | Agent Tower 内部 MCP/API 调用凭证，由服务端启动器注入；不要手写固定值或提交到仓库 |
+| `AGENT_TOWER_AGENT_CREDENTIAL` | Agent Tower 为托管 Agent/MCP 签发的临时 API 凭据，只绑定当前 session/invocation；不要手写或持久化 |
+| `AGENT_TOWER_INTERNAL_TOKEN` | Agent Tower 应用级内部 MCP/API 调用凭证，仅用于可信内部进程或手动 MCP 配置；不要提交到仓库 |
 | `AGENT_TOWER_WEB_DIR` | 静态前端目录 |
 | `AGENT_TOWER_NODE_RUNTIME` | 子进程启动 Node 脚本时使用的 Node/Electron runtime |
 | `AGENT_TOWER_MCP_ENTRY` | 打包桌面端注入给 agent 的 MCP 入口脚本路径 |

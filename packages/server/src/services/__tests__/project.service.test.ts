@@ -241,7 +241,8 @@ describe('ProjectService', () => {
   });
 
   it('abandons active workspaces when archiving a project', async () => {
-    const service = new ProjectService();
+    const backgroundService = { stopAllForWorkspace: vi.fn(async () => {}) };
+    const service = new ProjectService(backgroundService as any);
     const project = await prisma.project.create({
       data: {
         name: 'Project archive workspace cleanup',
@@ -276,6 +277,10 @@ describe('ProjectService', () => {
     });
 
     await service.archive(project.id);
+
+    expect(backgroundService.stopAllForWorkspace).toHaveBeenCalledTimes(2);
+    expect(backgroundService.stopAllForWorkspace).toHaveBeenCalledWith(activeWorkspace.id);
+    expect(backgroundService.stopAllForWorkspace).toHaveBeenCalledWith(abandonedWorkspace.id);
 
     await expect(prisma.workspace.findUnique({ where: { id: activeWorkspace.id } })).resolves.toMatchObject({
       status: 'ABANDONED',

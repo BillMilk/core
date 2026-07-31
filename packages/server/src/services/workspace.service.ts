@@ -3,7 +3,7 @@ import { WorkspaceKind, WorkspaceStatus, TaskStatus, SessionStatus, SessionPurpo
 import { WorktreeManager } from '../git/worktree.manager.js';
 import { execGit, MergeConflictError } from '../git/git-cli.js';
 import { NotFoundError, ServiceError } from '../errors.js';
-import { getSessionManager, getEventBus } from '../core/container.js';
+import { getSessionManager, getEventBus, getWorkspaceBackgroundService } from '../core/container.js';
 import { copyProjectFiles } from './copy-files.service.js';
 import { defaultTeamLockService, type TeamLockService } from './team-lock.service.js';
 import { exec } from 'node:child_process';
@@ -37,6 +37,8 @@ import {
   isMainDirectoryWorkspace,
   isWorktreeWorkspace,
 } from './workspace-kind.js';
+import type { WorkspaceBackgroundService } from './workspace-background-service.service.js';
+import { defaultWorkspaceLifecycleBarrier } from './workspace-lifecycle-barrier.js';
 
 const DEFAULT_IDLE_THRESHOLD_HOURS = 24;
 const WORKSPACE_READY_RETRY_COUNT = 20;
@@ -74,6 +76,13 @@ const visibleSessionsFilter = {
 } satisfies Prisma.SessionFindManyArgs;
 const activeSessionStatuses = [SessionStatus.PENDING, SessionStatus.RUNNING];
 const activeInvocationStatuses = ['QUEUED', 'RUNNING', 'SESSION_ENDED', 'WAITING_ROOM_REPLY'];
+const activeBackgroundServiceStates = ['STARTING', 'RUNNING', 'STOPPING'];
+const activeBackgroundServiceWhere = {
+  OR: [
+    { runtimeState: { in: activeBackgroundServiceStates } },
+    { runtimeInstanceId: { not: null } },
+  ],
+} satisfies Prisma.WorkspaceBackgroundServiceWhereInput;
 const finalChildWorkspaceStatuses = [WorkspaceStatus.MERGED, WorkspaceStatus.ABANDONED];
 
 export interface CreateWorkspaceOptions {
@@ -213,6 +222,7 @@ type MergeableComputationContext = {
   latestReviews: Map<string, VerdictRecord>;
   latestTests: Map<string, VerdictRecord>;
   ownerActiveMemberIds: Set<string>;
+  activeServiceWorkspaceIds: Set<string>;
 };
 
 type NormalizedCreateWorkspaceOptions = Required<CreateWorkspaceOptions>;
@@ -401,7 +411,11 @@ export class WorkspaceService {
   private sessionService = getSessionManager();
   private eventBus: EventBus = getEventBus();
 
-  constructor(private readonly lockService: TeamLockService = defaultTeamLockService) {}
+  constructor(
+    private readonly lockService: TeamLockService = defaultTeamLockService,
+    private readonly backgroundService: Pick<WorkspaceBackgroundService, 'stopAllForWorkspace'>
+      & Partial<Pick<WorkspaceBackgroundService, 'releaseLogsForWorkspace'>> = getWorkspaceBackgroundService(),
+  ) {}
 
   private getBaseBranch(workspace: {
     baseBranch: string | null;
@@ -846,7 +860,7 @@ export class WorkspaceService {
     const workspaceIds = dedicatedWorkspaces.map((workspace) => workspace.id);
     const ownerMemberIds = dedicatedWorkspaces.map((workspace) => workspace.ownerMemberId);
 
-    const [verdicts, ownerInvocations, parentActiveWriteSession, mainHeadSha] = await Promise.all([
+    const [verdicts, ownerInvocations, activeServices, parentActiveWriteSession, mainHeadSha] = await Promise.all([
       workspaceIds.length > 0
         ? prisma.workspaceVerdict.findMany({
           where: {
@@ -871,6 +885,15 @@ export class WorkspaceService {
             status: { in: activeInvocationStatuses },
           },
           select: { memberId: true },
+        })
+        : Promise.resolve([]),
+      workspaceIds.length > 0
+        ? prisma.workspaceBackgroundService.findMany({
+          where: {
+            workspaceId: { in: workspaceIds },
+            ...activeBackgroundServiceWhere,
+          },
+          select: { workspaceId: true },
         })
         : Promise.resolve([]),
       mainWorkspace
@@ -924,6 +947,7 @@ export class WorkspaceService {
       latestReviews,
       latestTests,
       ownerActiveMemberIds: new Set(ownerInvocations.map((invocation) => invocation.memberId)),
+      activeServiceWorkspaceIds: new Set(activeServices.map((service) => service.workspaceId)),
     };
   }
 
@@ -1052,6 +1076,13 @@ export class WorkspaceService {
 
       if (ownerHasActiveInvocation) {
         blockers.push(blocker('OWNER_HAS_ACTIVE_INVOCATION', 'BLOCKING', 'Cannot merge while the workspace owner has active work'));
+      }
+      if (context.activeServiceWorkspaceIds.has(workspace.id)) {
+        blockers.push(blocker(
+          'WORKSPACE_HAS_ACTIVE_SERVICE',
+          'BLOCKING',
+          'Cannot merge a workspace while one of its background services is active',
+        ));
       }
       if (context.mainWorkspace.hasActiveWriteSession) {
         blockers.push(blocker('PARENT_WORKSPACE_HAS_ACTIVE_SESSION', 'BLOCKING', 'Cannot merge into parent workspace while it has an active write session'));
@@ -1783,6 +1814,10 @@ export class WorkspaceService {
    * - worktree 清理失败时仍然删除数据库记录（记录警告日志）
    */
   async delete(id: string) {
+    return defaultWorkspaceLifecycleBarrier.withWorkspace(id, () => this.deleteWithLifecycle(id));
+  }
+
+  private async deleteWithLifecycle(id: string) {
     const workspace = await prisma.workspace.findUnique({
       where: { id },
       include: {
@@ -1808,6 +1843,8 @@ export class WorkspaceService {
       }
     }
 
+    await this.backgroundService.stopAllForWorkspace(id);
+
     if (isWorktreeWorkspace(workspace) && workspace.worktreePath) {
       // 清理 worktree
       try {
@@ -1821,7 +1858,8 @@ export class WorkspaceService {
       }
     }
 
-    // 删除数据库记录（级联删除 sessions）
+    // 删除数据库记录（级联删除 sessions/services）
+    await this.backgroundService.releaseLogsForWorkspace?.(id);
     await prisma.workspace.delete({ where: { id } });
     return true;
   }
@@ -1926,25 +1964,28 @@ export class WorkspaceService {
   async merge(id: string, commitMessage?: string): Promise<string>;
   async merge(id: string, options?: MergeWorkspaceOptions): Promise<string>;
   async merge(id: string, commitMessageOrOptions?: string | MergeWorkspaceOptions): Promise<string> {
-    const options = typeof commitMessageOrOptions === 'string'
-      ? { commitMessage: commitMessageOrOptions }
-      : (commitMessageOrOptions ?? {});
-    const workspace = await prisma.workspace.findUnique({
-      where: { id },
-      include: { task: { include: { project: true, teamRun: true } } },
+    return defaultWorkspaceLifecycleBarrier.withWorkspace(id, async () => {
+      const options = typeof commitMessageOrOptions === 'string'
+        ? { commitMessage: commitMessageOrOptions }
+        : (commitMessageOrOptions ?? {});
+      const workspace = await prisma.workspace.findUnique({
+        where: { id },
+        include: { task: { include: { project: true, teamRun: true } } },
+      });
+
+      if (!workspace) {
+        throw new NotFoundError('Workspace', id);
+      }
+      ensureProjectIsMutable(workspace.task.project, 'merge workspaces');
+      this.assertWorktreeWorkspace(workspace);
+      await this.assertNoActiveBackgroundServices(workspace.id);
+
+      return this.withMergeTargetLock(
+        this.getMergeLockTarget(workspace),
+        options.lockOwnerId,
+        () => this.mergeWithLock(workspace, options)
+      );
     });
-
-    if (!workspace) {
-      throw new NotFoundError('Workspace', id);
-    }
-    ensureProjectIsMutable(workspace.task.project, 'merge workspaces');
-    this.assertWorktreeWorkspace(workspace);
-
-    return this.withMergeTargetLock(
-      this.getMergeLockTarget(workspace),
-      options.lockOwnerId,
-      () => this.mergeWithLock(workspace, options)
-    );
   }
 
   private async mergeWithLock(workspace: MergeWorkspaceRecord, options: MergeWorkspaceOptions): Promise<string> {
@@ -1966,6 +2007,10 @@ export class WorkspaceService {
         400
       );
     }
+
+    // The preflight/readiness result can become stale while waiting for the
+    // merge target lock, so the process-writing invariant is checked again.
+    await this.assertNoActiveBackgroundServices(workspace.id);
 
     if (workspace.parentWorkspaceId) {
       if (this.isTeamRunDedicatedChildWorkspace(workspace)) {
@@ -2257,6 +2302,23 @@ export class WorkspaceService {
     }
   }
 
+  private async assertNoActiveBackgroundServices(workspaceId: string): Promise<void> {
+    const activeService = await prisma.workspaceBackgroundService.findFirst({
+      where: {
+        workspaceId,
+        ...activeBackgroundServiceWhere,
+      },
+      select: { id: true },
+    });
+    if (activeService) {
+      throw new ServiceError(
+        'Cannot merge a workspace while one of its background services is active',
+        'WORKSPACE_HAS_ACTIVE_SERVICE',
+        409,
+      );
+    }
+  }
+
   private getMergeLockTarget(workspace: MergeWorkspaceRecord): MergeLockTarget {
     if (workspace.parentWorkspaceId) {
       return this.getParentWorkspaceMergeLockTarget(workspace.parentWorkspaceId);
@@ -2307,6 +2369,10 @@ export class WorkspaceService {
    * 归档 Workspace（标记状态为 ABANDONED）
    */
   async archive(id: string) {
+    return defaultWorkspaceLifecycleBarrier.withWorkspace(id, () => this.archiveWithLifecycle(id));
+  }
+
+  private async archiveWithLifecycle(id: string) {
     const workspace = await prisma.workspace.findUnique({
       where: { id },
       include: { sessions: true, task: { include: { project: true } } },
@@ -2337,6 +2403,8 @@ export class WorkspaceService {
       }
     }
 
+    await this.backgroundService.stopAllForWorkspace(id);
+
     const archived = await prisma.workspace.update({
       where: { id },
       data: { status: WorkspaceStatus.ABANDONED },
@@ -2352,6 +2420,10 @@ export class WorkspaceService {
    * Branch 保留，可随时通过 reactivate() 恢复。
    */
   async hibernate(id: string): Promise<void> {
+    return defaultWorkspaceLifecycleBarrier.withWorkspace(id, () => this.hibernateWithLifecycle(id));
+  }
+
+  private async hibernateWithLifecycle(id: string): Promise<void> {
     const workspace = await prisma.workspace.findUnique({
       where: { id },
       include: {
@@ -2383,6 +2455,10 @@ export class WorkspaceService {
         409,
       );
     }
+
+    // Hibernation removes the worktree. Long-running services must stop first
+    // and remain stopped after reactivation.
+    await this.backgroundService.stopAllForWorkspace(id);
 
     // Auto-commit any dirty changes before removing worktree
     if (workspace.worktreePath) {
@@ -2601,41 +2677,46 @@ export class WorkspaceService {
 
     for (const workspace of workspaces) {
       try {
-        if (isMainDirectoryWorkspace(workspace)) {
+        await defaultWorkspaceLifecycleBarrier.withWorkspace(workspace.id, async () => {
+          await this.backgroundService.stopAllForWorkspace(workspace.id);
+          if (isMainDirectoryWorkspace(workspace)) {
+            await this.backgroundService.releaseLogsForWorkspace?.(workspace.id);
+            await prisma.workspace.delete({ where: { id: workspace.id } });
+            cleaned++;
+            return;
+          }
+
+          const worktreeManager = new WorktreeManager(workspace.task.project.repoPath);
+
+          // 清理残留 worktree（如果还存在）
+          if (workspace.worktreePath) {
+            const removeResult = await worktreeManager.remove(workspace.worktreePath);
+            if (removeResult.status === 'unregistered') {
+              console.warn(
+                `[WorkspaceService] cleanup: workspace ${workspace.id} path is unregistered or unsafe to remove: ${removeResult.path}`,
+              );
+              return;
+            }
+          }
+
+          // Task 已 DONE，branch 不再需要，删除。安全 helper 会跳过 base/main/master/current/missing。
+          const branchDeleteResult = await worktreeManager.deleteBranchIfSafe(workspace.branchName, {
+            protectedBranches: [workspace.task.project.mainBranch, workspace.baseBranch],
+          });
+          if (branchDeleteResult.status === 'failed') {
+            console.warn(
+              `[WorkspaceService] cleanup: failed to delete branch ${branchDeleteResult.branchName} for workspace ${workspace.id}: ${branchDeleteResult.reason}`,
+            );
+          } else if (branchDeleteResult.status === 'checked_out') {
+            console.warn(
+              `[WorkspaceService] cleanup: skipped checked-out branch ${branchDeleteResult.branchName} for workspace ${workspace.id}: ${branchDeleteResult.reason}`,
+            );
+          }
+
+          await this.backgroundService.releaseLogsForWorkspace?.(workspace.id);
           await prisma.workspace.delete({ where: { id: workspace.id } });
           cleaned++;
-          continue;
-        }
-
-        const worktreeManager = new WorktreeManager(workspace.task.project.repoPath);
-
-        // 清理残留 worktree（如果还存在）
-        if (workspace.worktreePath) {
-          const removeResult = await worktreeManager.remove(workspace.worktreePath);
-          if (removeResult.status === 'unregistered') {
-            console.warn(
-              `[WorkspaceService] cleanup: workspace ${workspace.id} path is unregistered or unsafe to remove: ${removeResult.path}`,
-            );
-            continue;
-          }
-        }
-
-        // Task 已 DONE，branch 不再需要，删除。安全 helper 会跳过 base/main/master/current/missing。
-        const branchDeleteResult = await worktreeManager.deleteBranchIfSafe(workspace.branchName, {
-          protectedBranches: [workspace.task.project.mainBranch, workspace.baseBranch],
         });
-        if (branchDeleteResult.status === 'failed') {
-          console.warn(
-            `[WorkspaceService] cleanup: failed to delete branch ${branchDeleteResult.branchName} for workspace ${workspace.id}: ${branchDeleteResult.reason}`,
-          );
-        } else if (branchDeleteResult.status === 'checked_out') {
-          console.warn(
-            `[WorkspaceService] cleanup: skipped checked-out branch ${branchDeleteResult.branchName} for workspace ${workspace.id}: ${branchDeleteResult.reason}`,
-          );
-        }
-
-        await prisma.workspace.delete({ where: { id: workspace.id } });
-        cleaned++;
       } catch (err) {
         // worktree 删除失败时保留 DB 记录，下次 scan 重试
         console.warn(

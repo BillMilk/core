@@ -243,9 +243,8 @@ function createPreviewAccessToken(settings: AccessAuthSettingsRecord, workspaceI
   return `${PREVIEW_ACCESS_TOKEN_VERSION}.${encodedWorkspaceId}.${expiresAtMs}.${nonce}.${signature}`;
 }
 
-function validateSessionToken(token: string | null, settings: AccessAuthSettingsRecord): boolean {
-  if (!settings.enabled || !settings.passwordHash || !token) return !settings.enabled;
-
+function validateSignedSessionToken(token: string | null, settings: AccessAuthSettingsRecord): boolean {
+  if (!token) return false;
   const [version, rawExpiresAt, nonce, signature] = token.split('.');
   if (version !== SESSION_TOKEN_PREFIX || !rawExpiresAt || !nonce || !signature) return false;
 
@@ -257,6 +256,10 @@ function validateSessionToken(token: string | null, settings: AccessAuthSettings
   const expectedBuffer = Buffer.from(expected);
   if (actualBuffer.length !== expectedBuffer.length) return false;
   return timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+function validateSessionToken(token: string | null, settings: AccessAuthSettingsRecord): boolean {
+  return settings.enabled ? validateSignedSessionToken(token, settings) : true;
 }
 
 function validatePreviewAccessToken(
@@ -331,6 +334,15 @@ export const AccessAuthService = {
   async validateSessionToken(cookieToken: string | null): Promise<boolean> {
     const settings = await ensureSettings();
     return validateSessionToken(cookieToken, settings);
+  },
+
+  async validateBrowserSessionToken(cookieToken: string | null): Promise<boolean> {
+    const settings = await ensureSettings();
+    return validateSignedSessionToken(cookieToken, settings);
+  },
+
+  async createBrowserSessionToken(): Promise<string> {
+    return createSessionToken(await ensureSettings());
   },
 
   async validateSessionTokenWithGeneration(

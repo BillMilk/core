@@ -40,10 +40,18 @@ function handleError(error: unknown, reply: FastifyReply) {
 }
 
 export async function accessAuthRoutes(app: FastifyInstance) {
-  app.get('/access-auth/status', async (request) => {
+  app.get('/access-auth/status', async (request, reply) => {
     const cookieToken = request.cookies[AccessAuthService.cookieName]
       ?? AccessAuthService.extractCookieFromHeader(request.headers.cookie);
-    return AccessAuthService.getPublicStatus(cookieToken);
+    const status = await AccessAuthService.getPublicStatus(cookieToken);
+    if (!status.enabled && !await AccessAuthService.validateBrowserSessionToken(cookieToken)) {
+      reply.setCookie(
+        AccessAuthService.cookieName,
+        await AccessAuthService.createBrowserSessionToken(),
+        AccessAuthService.getCookieOptions(request),
+      );
+    }
+    return status;
   });
 
   app.post('/access-auth/login', async (request, reply) => {

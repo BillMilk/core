@@ -70,6 +70,47 @@ description: 当前代码库中公开的主要 REST 端点。
 | `POST` | `/api/system/cleanup` | 清理可清理的 workspace |
 | `POST` | `/api/system/hibernate-idle` | 手动触发空闲 workspace 休眠 |
 
+Merge readiness 和实际 merge 锁内都会检查后台服务；候选 workspace 存在 `STARTING`、`RUNNING`、`STOPPING` 服务，或任意状态仍保留 runtime identity 时，以 `409 WORKSPACE_HAS_ACTIVE_SERVICE` 阻止合并。
+
+### Workspace 后台服务
+
+这些接口管理由 workspace 持有的长期进程。服务不会因启动它的 Agent session 完成、停止或 Socket 断开而退出；workspace 休眠、归档或删除时会停止。日志是有界内存 buffer，应用重启后不保留。
+
+| Method | Path | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/workspaces/:workspaceId/services` | 列出服务及 desired/runtime 状态 |
+| `PUT` | `/api/workspaces/:workspaceId/services/:name` | 幂等启动服务；body 为 `command`、可选 `args[]` 和 workspace 内 `relativeCwd` |
+| `GET` | `/api/workspaces/:workspaceId/services/:name/logs` | 读取日志；支持 `runtimeInstanceId`、`afterSeq` 和 `limit` |
+| `POST` | `/api/workspaces/:workspaceId/services/:name/input` | 写入 PTY；body 为 `{ "data": "..." }` |
+| `POST` | `/api/workspaces/:workspaceId/services/:name/stop` | 停止整棵进程树并清除期望运行状态 |
+| `POST` | `/api/workspaces/:workspaceId/services/:name/restart` | 停止后用已保存的结构化命令重启 |
+
+启动接口不接受 shell 命令字符串、绝对 cwd 或自定义 env。项目配置继续由自身 `.env` 和启动脚本读取。服务名只允许字母、数字、点、下划线和连字符，最长 64 个字符。
+
+同源且通过 access auth 的浏览器可以调用两个只读 GET：服务列表与服务日志。浏览器不能调用启动/更新、输入、停止或重启接口，这些控制操作仍会返回 `WORKSPACE_SERVICE_BROWSER_UNAVAILABLE`。公共 status 端点签发的 cookie、缺少 Origin/Referer 或自报 session/invocation/internal identity 都不能换取控制权限。
+
+日志响应包含真实 `runtimeInstanceId`、`oldestSeq`、`nextSeq`、`reset`、`truncated` 和 `hasMore`。首次读取可以省略 `runtimeInstanceId`；后续增量读取应同时提交上一响应的 `runtimeInstanceId` 和最后消费的 seq（作为 `afterSeq`）。当请求代际与当前 runtime 不一致或游标已重置时，服务端忽略旧游标、返回当前代际并将 `reset` 设为 true，客户端必须丢弃旧代际缓存。`truncated` 仅表示更早日志已被有界 buffer 丢弃，或最新页读取省略了无法再向前获取的内容；`hasMore` 只表示当前游标后还有正常分页，完整追平后不会触发日志丢失提示。
+
+托管 MCP 使用服务端签发的 per-session/invocation credential，后端从 credential 恢复不可修改的 identity：Solo session 必须绑定目标 workspace；TeamRun session 还会重验 invocation/session/workspace、活跃成员和 `runCommands` capability。credential 跟随 DriverSession/MCP transport 跨自然完成与 follow-up 保持有效，在 DriverSession 关闭、显式停止 Session、启动失败或应用退出时撤销。应用级内部调用仍可使用 `x-agent-tower-internal-token`。
+
+后台服务 start/restart 与 workspace merge、hibernate、archive、delete、task/project cleanup 共用 workspace lifecycle barrier。终态操作会在 barrier 内禁止新 start、停止全部 runtime，再完成文件系统或状态变更。
+
+稳定业务错误码包括：
+
+| HTTP | Code | 含义 |
+| --- | --- | --- |
+| `401` | `WORKSPACE_SERVICE_AUTH_REQUIRED` / `ACCESS_AUTH_INVALID_AGENT_CREDENTIAL` | 缺少 Agent 身份，或 Agent credential 无效/身份冲突 |
+| `403` | `WORKSPACE_SERVICE_BROWSER_UNAVAILABLE` | 浏览器尝试启动、更新、输入、停止或重启服务 |
+| `400` | `VALIDATION_ERROR` / `CWD_NOT_FOUND` / `CWD_OUTSIDE_WORKSPACE` | 输入或相对目录无效 |
+| `403` | `INTERNAL_CALLER_IDENTITY_REQUIRED` / `INTERNAL_SESSION_NOT_FOUND` | internal caller 缺少或使用无效 session identity |
+| `403` | `SESSION_WORKSPACE_MISMATCH` | session 不属于目标 workspace |
+| `403` | `INVOCATION_IDENTITY_REQUIRED` / `INVOCATION_SESSION_MISMATCH` / `INVOCATION_WORKSPACE_MISMATCH` | TeamRun invocation identity 缺少或绑定不匹配 |
+| `403` | `TEAM_RUN_MEMBER_CAPABILITY_REQUIRED` | TeamRun 成员没有 `runCommands` |
+| `404` | `WORKSPACE_NOT_FOUND` / `WORKSPACE_SERVICE_NOT_FOUND` | workspace 或服务不存在 |
+| `409` | `WORKSPACE_NOT_ACTIVE` / `SERVICE_SPEC_CONFLICT` / `SERVICE_BUSY` / `SERVICE_NOT_RUNNING` | workspace 或服务状态不允许操作 |
+| `429` | `WORKSPACE_SERVICE_LIMIT_REACHED` | workspace 已达到服务数量上限 |
+| `500` | `SERVICE_START_FAILED` / `SERVICE_START_CLEANUP_FAILED` / `SERVICE_STOP_TIMEOUT` | 启动、失败补偿或进程树清理失败 |
+
 ## Sessions
 
 | Method | Path | 说明 |

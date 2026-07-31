@@ -2,6 +2,8 @@ import { prisma } from '../utils/index.js';
 import { WorktreeManager } from '../git/worktree.manager.js';
 import type { SessionManager } from './session-manager.js';
 import { isWorktreeWorkspace } from './workspace-kind.js';
+import type { WorkspaceBackgroundService } from './workspace-background-service.service.js';
+import { defaultWorkspaceLifecycleBarrier } from './workspace-lifecycle-barrier.js';
 
 export const TaskCleanupJobStatus = {
   PENDING: 'PENDING',
@@ -77,6 +79,8 @@ export class TaskCleanupService {
 
   constructor(
     private readonly sessionManager: SessionManager,
+    private readonly backgroundService?: Pick<WorkspaceBackgroundService, 'stopAllForWorkspace'>
+      & Partial<Pick<WorkspaceBackgroundService, 'releaseLogsForWorkspace'>>,
   ) {}
 
   start(intervalMs = 30_000): void {
@@ -191,7 +195,18 @@ export class TaskCleanupService {
   }
 
   private async cleanupSnapshot(snapshot: TaskCleanupSnapshot): Promise<void> {
+    await defaultWorkspaceLifecycleBarrier.withWorkspaces(
+      snapshot.workspaces.map((workspace) => workspace.id),
+      () => this.cleanupSnapshotWithLifecycle(snapshot),
+    );
+  }
+
+  private async cleanupSnapshotWithLifecycle(snapshot: TaskCleanupSnapshot): Promise<void> {
     const worktreeManager = new WorktreeManager(snapshot.project.repoPath);
+
+    for (const workspace of snapshot.workspaces) {
+      await this.backgroundService?.stopAllForWorkspace(workspace.id);
+    }
 
     for (const workspace of snapshot.workspaces) {
       for (const session of workspace.sessions) {
@@ -230,6 +245,10 @@ export class TaskCleanupService {
 
     if (snapshot.workspaces.some((workspace) => isWorktreeWorkspace(workspace))) {
       await worktreeManager.prune();
+    }
+
+    for (const workspace of snapshot.workspaces) {
+      await this.backgroundService?.releaseLogsForWorkspace?.(workspace.id);
     }
   }
 

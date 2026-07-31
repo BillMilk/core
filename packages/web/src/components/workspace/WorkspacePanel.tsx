@@ -327,7 +327,12 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = React.memo(
                 className="absolute inset-0 h-full w-full min-h-0 min-w-0 overflow-hidden"
                 style={{ display: visible ? 'block' : 'none' }}
               >
-                <TerminalTabs cwd={dir} isVisible={visible} quickCommands={quickCommands} />
+                <TerminalTabs
+                  cwd={dir}
+                  workspaceId={visible ? workspaceId : undefined}
+                  isVisible={visible}
+                  quickCommands={quickCommands}
+                />
               </div>
             )
           })}

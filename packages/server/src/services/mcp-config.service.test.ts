@@ -75,6 +75,22 @@ describe('mcp-config service', () => {
     expect(config.configJson).not.toContain('agent-tower-mcp')
   })
 
+  it('uses a bound Agent credential without exposing the global internal token', () => {
+    const config = buildMcpConfigResponse({
+      env: {
+        AGENT_TOWER_MCP_ENTRY: sourceMcpEntry,
+        AGENT_TOWER_URL: 'http://127.0.0.1:42232',
+        AGENT_TOWER_AGENT_CREDENTIAL: 'bound-agent-credential',
+        AGENT_TOWER_INTERNAL_TOKEN: 'must-not-be-forwarded',
+      } as NodeJS.ProcessEnv,
+    })
+
+    expect(config.env).toEqual({
+      AGENT_TOWER_AGENT_CREDENTIAL: 'bound-agent-credential',
+      AGENT_TOWER_URL: 'http://127.0.0.1:42232',
+    })
+  })
+
   it('launches the source MCP with the repository tsx loader in development', () => {
     const launch = resolveManagedMcpLaunchSpec({} as NodeJS.ProcessEnv)
 

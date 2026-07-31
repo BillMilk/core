@@ -18,6 +18,9 @@ import {
   WorkspaceStatus,
   WorkspaceKind,
 } from '../types/index.js';
+import { getWorkspaceBackgroundService } from '../core/container.js';
+import type { WorkspaceBackgroundService } from './workspace-background-service.service.js';
+import { defaultWorkspaceLifecycleBarrier } from './workspace-lifecycle-barrier.js';
 
 interface CreateProjectInput {
   name: string;
@@ -246,6 +249,10 @@ function buildRepoIdentityWarnings(
 }
 
 export class ProjectService {
+  constructor(
+    private readonly backgroundService: Pick<WorkspaceBackgroundService, 'stopAllForWorkspace'> = getWorkspaceBackgroundService(),
+  ) {}
+
   /**
    * 获取项目列表（支持分页）
    */
@@ -448,64 +455,73 @@ export class ProjectService {
     }
 
     const allWorkspaces = project.tasks.flatMap((task) => task.workspaces);
-    const activeSessions = allWorkspaces.flatMap((workspace) =>
-      workspace.sessions.filter(
-        (session) =>
-          session.status === SessionStatus.PENDING ||
-          session.status === SessionStatus.RUNNING
-      )
-    );
+    return defaultWorkspaceLifecycleBarrier.withWorkspaces(
+      allWorkspaces.map((workspace) => workspace.id),
+      async () => {
+        const activeSessions = allWorkspaces.flatMap((workspace) =>
+          workspace.sessions.filter(
+            (session) =>
+              session.status === SessionStatus.PENDING ||
+              session.status === SessionStatus.RUNNING
+          )
+        );
 
-    if (activeSessions.length > 0) {
-      throw new ValidationError(
-        `Project "${project.name}" still has running sessions. Stop them before deleting the project.`
-      );
-    }
+        if (activeSessions.length > 0) {
+          throw new ValidationError(
+            `Project "${project.name}" still has running sessions. Stop them before deleting the project.`
+          );
+        }
 
-    const activeWorkspaceIds = allWorkspaces
-      .filter((workspace) => workspace.status === WorkspaceStatus.ACTIVE)
-      .map((workspace) => workspace.id);
+        for (const workspace of allWorkspaces) {
+          await this.backgroundService.stopAllForWorkspace(workspace.id);
+        }
 
-    if (activeWorkspaceIds.length > 0) {
-      await prisma.workspace.updateMany({
-        where: { id: { in: activeWorkspaceIds } },
-        data: { status: WorkspaceStatus.ABANDONED },
-      });
-    }
+        const activeWorkspaceIds = allWorkspaces
+          .filter((workspace) => workspace.status === WorkspaceStatus.ACTIVE)
+          .map((workspace) => workspace.id);
 
-    if (input.deleteRepo) {
-      const uniqueWorktreePaths = Array.from(
-        new Set(
-          allWorkspaces
-            .filter((workspace) => workspace.workspaceKind === WorkspaceKind.WORKTREE)
-            .map((workspace) => workspace.worktreePath)
-            .filter((value): value is string => Boolean(value))
-        )
-      );
+        if (activeWorkspaceIds.length > 0) {
+          await prisma.workspace.updateMany({
+            where: { id: { in: activeWorkspaceIds } },
+            data: { status: WorkspaceStatus.ABANDONED },
+          });
+        }
 
-      await Promise.all(
-        uniqueWorktreePaths.map((worktreePath) =>
-          fsPromises.rm(worktreePath, { recursive: true, force: true })
-        )
-      );
-      await fsPromises.rm(project.repoPath, { recursive: true, force: true });
+        if (input.deleteRepo) {
+          const uniqueWorktreePaths = Array.from(
+            new Set(
+              allWorkspaces
+                .filter((workspace) => workspace.workspaceKind === WorkspaceKind.WORKTREE)
+                .map((workspace) => workspace.worktreePath)
+                .filter((value): value is string => Boolean(value))
+            )
+          );
 
-      if (allWorkspaces.length > 0) {
-        await prisma.workspace.updateMany({
-          where: { id: { in: allWorkspaces.map((workspace) => workspace.id) } },
-          data: { worktreePath: '', workingDir: '' },
+          await Promise.all(
+            uniqueWorktreePaths.map((worktreePath) =>
+              fsPromises.rm(worktreePath, { recursive: true, force: true })
+            )
+          );
+          await fsPromises.rm(project.repoPath, { recursive: true, force: true });
+
+          if (allWorkspaces.length > 0) {
+            await prisma.workspace.updateMany({
+              where: { id: { in: allWorkspaces.map((workspace) => workspace.id) } },
+              data: { worktreePath: '', workingDir: '' },
+            });
+          }
+        }
+
+        const archived = await prisma.project.update({
+          where: { id },
+          data: {
+            archivedAt: new Date(),
+            repoDeletedAt: input.deleteRepo ? new Date() : null,
+          },
         });
-      }
-    }
-
-    const archived = await prisma.project.update({
-      where: { id },
-      data: {
-        archivedAt: new Date(),
-        repoDeletedAt: input.deleteRepo ? new Date() : null,
+        return this.withGitMetadata(archived);
       },
-    });
-    return this.withGitMetadata(archived);
+    );
   }
 
   async restore(id: string, input: RestoreProjectInput = {}): Promise<RestoreProjectResult<any>> {

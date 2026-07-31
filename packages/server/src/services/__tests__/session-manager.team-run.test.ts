@@ -8,12 +8,17 @@ import type { PrismaClient } from '@prisma/client';
 import { AgentType, SessionStatus } from '../../types/index.js';
 import { EventBus } from '../../core/event-bus.js';
 import type { BaseExecutor, ExecutorSpawnConfig } from '../../executors/index.js';
+import { withWorkspaceBackgroundServicePolicy } from '../../prompts/workspace-background-service-policy.js';
 import { TeamLockService } from '../team-lock.service.js';
 import {
   AGENT_SUBPROCESS_BLOCKED_ENV_KEYS,
   AGENT_TOWER_MCP_IDENTITY_ENV_KEYS,
   AGENT_TOWER_MCP_SERVICE_ENV_KEYS,
 } from '../../executors/execution-env.js';
+import {
+  AGENT_API_CREDENTIAL_ENV,
+  validateAgentApiCredential,
+} from '../../utils/agent-api-credential.js';
 
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-tower-session-manager-team-run-'));
 const dbPath = path.join(testDir, 'test.db');
@@ -89,6 +94,7 @@ const schemaPath = path.join(serverRoot, 'prisma/schema.prisma');
 let prisma: PrismaClient;
 let SessionManager: typeof import('../session-manager.js').SessionManager;
 let getExecutorByProvider: typeof import('../../executors/index.js').getExecutorByProvider;
+let getProviderById: typeof import('../../executors/index.js').getProviderById;
 let CommandBuildError: typeof import('../../executors/command-builder.js').CommandBuildError;
 let CodexExecutor: typeof import('../../executors/codex.executor.js').CodexExecutor;
 let ClaudeCodeExecutor: typeof import('../../executors/claude-code.executor.js').ClaudeCodeExecutor;
@@ -127,10 +133,13 @@ function expectServiceEnvFiltered(fullEnv: Record<string, string>): void {
   expect(fullEnv).toMatchObject({
     AGENT_TOWER_URL: 'http://127.0.0.1:12580',
     AGENT_TOWER_PORT: '12580',
-    AGENT_TOWER_INTERNAL_TOKEN: 'service-internal-token',
     AGENT_TOWER_TEST_NORMAL_ENV: 'keep-me',
     PROVIDER_SAFE_ENV: 'provider-value',
   });
+  expect(fullEnv).not.toHaveProperty('AGENT_TOWER_INTERNAL_TOKEN');
+  expect(validateAgentApiCredential(
+    fullEnv[AGENT_API_CREDENTIAL_ENV],
+  )).toMatchObject({ sessionId: fullEnv.AGENT_TOWER_SESSION_ID });
 }
 
 function createPty() {
@@ -195,6 +204,7 @@ describe('SessionManager TeamRun env injection', () => {
     prisma = utilsModule.prisma;
     SessionManager = sessionManagerModule.SessionManager;
     getExecutorByProvider = executorsModule.getExecutorByProvider;
+    getProviderById = executorsModule.getProviderById;
     CommandBuildError = commandBuilderModule.CommandBuildError;
     CodexExecutor = codexModule.CodexExecutor;
     ClaudeCodeExecutor = claudeModule.ClaudeCodeExecutor;
@@ -383,7 +393,7 @@ describe('SessionManager TeamRun env injection', () => {
     manager.destroyAll();
   });
 
-  it('does not inject TeamRun env for a solo session', async () => {
+  it('injects only the workspace-bound session identity for a solo session', async () => {
     const { workspace } = await createWorkspace();
     const session = await prisma.session.create({
       data: {
@@ -398,13 +408,13 @@ describe('SessionManager TeamRun env injection', () => {
     await manager.start(session.id);
 
     const spawnConfig = spawnMock.mock.calls[0]![0] as ExecutorSpawnConfig;
-    expect(spawnConfig.env.toObject()).not.toHaveProperty('AGENT_TOWER_SESSION_ID');
+    expect(spawnConfig.env.toObject()).toMatchObject({ AGENT_TOWER_SESSION_ID: session.id });
     expect(spawnConfig.env.toObject()).not.toHaveProperty('AGENT_TOWER_INVOCATION_ID');
     expect(spawnConfig.env.toObject()).not.toHaveProperty('AGENT_TOWER_TEAM_RUN_ID');
     expect(spawnConfig.env.toObject()).not.toHaveProperty('AGENT_TOWER_MEMBER_ID');
     const fullEnv = spawnConfig.env.getFullEnv();
     expectServiceEnvFiltered(fullEnv);
-    expect(fullEnv).not.toHaveProperty('AGENT_TOWER_SESSION_ID');
+    expect(fullEnv).toMatchObject({ AGENT_TOWER_SESSION_ID: session.id });
     expect(fullEnv).not.toHaveProperty('AGENT_TOWER_INVOCATION_ID');
     expect(fullEnv).not.toHaveProperty('AGENT_TOWER_TEAM_RUN_ID');
     expect(fullEnv).not.toHaveProperty('AGENT_TOWER_MEMBER_ID');
@@ -486,7 +496,7 @@ describe('SessionManager TeamRun env injection', () => {
     expect(spawnFollowUpMock.mock.calls[0]![1]).toBe('agent-native-session-1');
     expect(spawnMock).not.toHaveBeenCalled();
     const spawnConfig = spawnFollowUpMock.mock.calls[0]![0] as ExecutorSpawnConfig;
-    expect(spawnConfig.prompt).toBe('next prompt');
+    expect(spawnConfig.prompt).toBe(withWorkspaceBackgroundServicePolicy('next prompt'));
     expect(spawnConfig.env.toObject()).toMatchObject({
       AGENT_TOWER_SESSION_ID: nextSession.id,
       AGENT_TOWER_INVOCATION_ID: invocation.id,
@@ -643,6 +653,14 @@ describe('SessionManager TeamRun env injection', () => {
       },
     });
     vi.mocked(getExecutorByProvider).mockReturnValueOnce(executor);
+    vi.mocked(getProviderById).mockReturnValueOnce({
+      id: providerId,
+      name: `${agentType} invalid settings`,
+      agentType,
+      env: {},
+      config: {},
+      isDefault: false,
+    });
     const scheduler = new TeamSchedulerService(new TeamLockService(), {
       workspaceService: { create: vi.fn(async () => workspace) },
       sessionManager: manager,

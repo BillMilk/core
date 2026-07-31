@@ -2,10 +2,35 @@
  * agent-tower 后端 API HTTP 客户端
  * MCP 服务器通过此客户端代理调用后端 REST API
  */
+import type {
+  WorkspaceBackgroundServiceDto,
+  WorkspaceBackgroundServiceInputResponse,
+  WorkspaceBackgroundServiceLogsResponse,
+  WorkspaceBackgroundServicesResponse,
+} from '@agent-tower/shared';
+import {
+  INTERNAL_API_INVOCATION_ID_HEADER,
+  INTERNAL_API_SESSION_ID_HEADER,
+  INTERNAL_API_TOKEN_HEADER,
+} from '../utils/internal-api-token.js';
+import { AGENT_API_CREDENTIAL_HEADER } from '../utils/agent-api-credential.js';
+
+export class AgentTowerApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    public readonly apiMessage: string,
+  ) {
+    super(`[${code}] ${apiMessage}`);
+    this.name = 'AgentTowerApiError';
+  }
+}
 
 export class AgentTowerClient {
   private invocationIdOverride?: string;
+  private sessionIdOverride?: string;
   private internalApiToken?: string;
+  private agentApiCredential?: string;
 
   constructor(private baseUrl: string) {}
 
@@ -13,8 +38,16 @@ export class AgentTowerClient {
     this.invocationIdOverride = invocationId;
   }
 
+  setSessionId(sessionId: string | undefined): void {
+    this.sessionIdOverride = sessionId;
+  }
+
   setInternalApiToken(token: string | undefined): void {
     this.internalApiToken = token;
+  }
+
+  setAgentApiCredential(credential: string | undefined): void {
+    this.agentApiCredential = credential;
   }
 
   private url(path: string): string {
@@ -34,10 +67,16 @@ export class AgentTowerClient {
     }
     const invocationId = this.invocationIdOverride ?? process.env.AGENT_TOWER_INVOCATION_ID;
     if (invocationId) {
-      headers['x-agent-tower-invocation-id'] = invocationId;
+      headers[INTERNAL_API_INVOCATION_ID_HEADER] = invocationId;
     }
-    if (this.internalApiToken) {
-      headers['x-agent-tower-internal-token'] = this.internalApiToken;
+    const sessionId = this.sessionIdOverride ?? process.env.AGENT_TOWER_SESSION_ID;
+    if (sessionId) {
+      headers[INTERNAL_API_SESSION_ID_HEADER] = sessionId;
+    }
+    if (this.agentApiCredential) {
+      headers[AGENT_API_CREDENTIAL_HEADER] = this.agentApiCredential;
+    } else if (this.internalApiToken) {
+      headers[INTERNAL_API_TOKEN_HEADER] = this.internalApiToken;
     }
 
     const resp = await fetch(url, {
@@ -48,7 +87,17 @@ export class AgentTowerClient {
 
     if (!resp.ok) {
       const text = await resp.text().catch(() => '');
-      throw new Error(`API ${method} ${path} failed (${resp.status}): ${text}`);
+      let payload: { error?: unknown; code?: unknown } = {};
+      try {
+        payload = JSON.parse(text) as { error?: unknown; code?: unknown };
+      } catch {
+        // Non-JSON upstream errors are mapped to a stable generic code.
+      }
+      const code = typeof payload.code === 'string' ? payload.code : 'HTTP_ERROR';
+      const message = typeof payload.error === 'string'
+        ? payload.error
+        : `API ${method} ${path} failed (${resp.status})`;
+      throw new AgentTowerApiError(resp.status, code, message);
     }
 
     // 204 No Content
@@ -129,6 +178,65 @@ export class AgentTowerClient {
     reason?: string;
   }) {
     return this.request<any>('POST', `/api/workspaces/${workspaceId}/verdicts`, input);
+  }
+
+  async startWorkspaceService(workspaceId: string, serviceName: string, input: {
+    command: string;
+    args?: string[];
+    relativeCwd?: string;
+  }): Promise<WorkspaceBackgroundServiceDto> {
+    return this.request<WorkspaceBackgroundServiceDto>(
+      'PUT',
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/services/${encodeURIComponent(serviceName)}`,
+      input,
+    );
+  }
+
+  async listWorkspaceServices(workspaceId: string): Promise<WorkspaceBackgroundServicesResponse> {
+    return this.request<WorkspaceBackgroundServicesResponse>(
+      'GET',
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/services`,
+    );
+  }
+
+  async getWorkspaceServiceLogs(workspaceId: string, serviceName: string, params: {
+    afterSeq?: number;
+    runtimeInstanceId?: string;
+    limit?: number;
+  } = {}): Promise<WorkspaceBackgroundServiceLogsResponse> {
+    const query: Record<string, string> = {};
+    if (params.afterSeq !== undefined) query.afterSeq = String(params.afterSeq);
+    if (params.runtimeInstanceId !== undefined) query.runtimeInstanceId = params.runtimeInstanceId;
+    if (params.limit !== undefined) query.limit = String(params.limit);
+    return this.request<WorkspaceBackgroundServiceLogsResponse>(
+      'GET',
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/services/${encodeURIComponent(serviceName)}/logs`,
+      undefined,
+      query,
+    );
+  }
+
+  async sendWorkspaceServiceInput(
+    workspaceId: string,
+    serviceName: string,
+    data: string,
+  ): Promise<WorkspaceBackgroundServiceInputResponse> {
+    return this.request<WorkspaceBackgroundServiceInputResponse>(
+      'POST',
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/services/${encodeURIComponent(serviceName)}/input`,
+      { data },
+    );
+  }
+
+  async controlWorkspaceService(
+    workspaceId: string,
+    serviceName: string,
+    action: 'stop' | 'restart',
+  ): Promise<WorkspaceBackgroundServiceDto> {
+    return this.request<WorkspaceBackgroundServiceDto>(
+      'POST',
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/services/${encodeURIComponent(serviceName)}/${action}`,
+    );
   }
 
   // ── Providers ──

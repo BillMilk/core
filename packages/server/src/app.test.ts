@@ -7,6 +7,8 @@ const taskCleanupStartMock = vi.fn()
 const taskCleanupStopMock = vi.fn()
 const memberHeartbeatStartMock = vi.fn()
 const memberHeartbeatStopMock = vi.fn()
+const backgroundReconcileMock = vi.fn(async () => {})
+const backgroundShutdownMock = vi.fn(async () => {})
 
 vi.mock('./routes/index.js', () => ({
   registerRoutes: vi.fn(async () => {}),
@@ -29,6 +31,10 @@ vi.mock('./core/container.js', () => ({
   getTaskCleanupService: vi.fn(() => ({
     start: taskCleanupStartMock,
     stop: taskCleanupStopMock,
+  })),
+  getWorkspaceBackgroundService: vi.fn(() => ({
+    reconcile: backgroundReconcileMock,
+    shutdown: backgroundShutdownMock,
   })),
 }))
 
@@ -70,6 +76,8 @@ describe('buildApp static web hosting', () => {
     tempWebDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-tower-web-'))
     taskCleanupStartMock.mockClear()
     taskCleanupStopMock.mockClear()
+    backgroundReconcileMock.mockClear()
+    backgroundShutdownMock.mockClear()
   })
 
   afterEach(() => {
@@ -99,6 +107,8 @@ describe('buildApp static web hosting', () => {
     } finally {
       await app.close()
     }
+    expect(backgroundReconcileMock).toHaveBeenCalledOnce()
+    expect(backgroundShutdownMock).toHaveBeenCalledOnce()
   })
 
   it('serves the web app when AGENT_TOWER_WEB_DIR is set', async () => {

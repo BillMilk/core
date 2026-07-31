@@ -106,6 +106,7 @@ export interface RuntimeCoordinatorHost {
   onTurnEvent(event: RuntimeTurnEventEnvelope): void;
   onRuntimeState(state: RuntimeStateDto): void;
   onProcessEvent(event: RuntimeProcessEvent): Promise<void>;
+  onDriverSessionDisposed?(towerSessionId: string): void;
 }
 
 export interface StartRuntimeTurnInput extends RuntimeOpenInput {

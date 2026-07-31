@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { McpConfigResponse, McpConfigRuntimeMode } from '@agent-tower/shared';
 import { INTERNAL_API_TOKEN_ENV, requireInternalApiTokenFromEnv } from '../utils/internal-api-token.js';
+import { AGENT_API_CREDENTIAL_ENV } from '../utils/agent-api-credential.js';
 
 const SERVER_NAME = 'agent-tower';
 const require = createRequire(import.meta.url);
@@ -109,9 +110,14 @@ export function buildMcpConfigResponse(options: {
   const env = options.env ?? process.env;
   const launch = resolveManagedMcpLaunchSpec(env);
   const configEnv: Record<string, string> = {
-    [INTERNAL_API_TOKEN_ENV]: requireInternalApiTokenFromEnv(env),
     AGENT_TOWER_URL: resolveBackendUrl(env),
   };
+  const agentCredential = env[AGENT_API_CREDENTIAL_ENV]?.trim();
+  if (agentCredential) {
+    configEnv[AGENT_API_CREDENTIAL_ENV] = agentCredential;
+  } else {
+    configEnv[INTERNAL_API_TOKEN_ENV] = requireInternalApiTokenFromEnv(env);
+  }
   if (env.AGENT_TOWER_PORT) {
     configEnv.AGENT_TOWER_PORT = env.AGENT_TOWER_PORT;
   }

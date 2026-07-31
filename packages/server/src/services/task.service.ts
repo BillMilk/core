@@ -9,6 +9,8 @@ import {
 import type { EventBus } from '../core/event-bus.js';
 import type { SessionManager } from './session-manager.js';
 import type { TaskCleanupService, TaskCleanupSnapshot } from './task-cleanup.service.js';
+import type { WorkspaceBackgroundService } from './workspace-background-service.service.js';
+import { defaultWorkspaceLifecycleBarrier } from './workspace-lifecycle-barrier.js';
 import { ensureProjectIsMutable, getStoredProjectGitCapability } from './project-guards.js';
 import { defaultTeamLockService } from './team-lock.service.js';
 import type { TaskBoardItem, TaskBoardResponse } from '@agent-tower/shared';
@@ -271,6 +273,7 @@ export class TaskService {
     private readonly eventBus: EventBus,
     private readonly sessionManager: SessionManager,
     private readonly cleanupService: Pick<TaskCleanupService, 'trigger'> | undefined = undefined,
+    private readonly backgroundService?: Pick<WorkspaceBackgroundService, 'stopAllForWorkspace'>,
   ) {}
 
   /**
@@ -739,14 +742,28 @@ export class TaskService {
     }
     ensureProjectIsMutable(taskForGuard.project, 'delete tasks');
 
-    const marked = await prisma.task.updateMany({
-      where: {
-        id,
-        deletedAt: null,
-        project: { archivedAt: null },
-      },
-      data: { deletedAt },
+    const workspaceIds = await prisma.workspace.findMany({
+      where: { taskId: id },
+      select: { id: true },
     });
+    let marked!: { count: number };
+    await defaultWorkspaceLifecycleBarrier.withWorkspaces(
+      workspaceIds.map((workspace) => workspace.id),
+      async () => {
+        for (const workspace of workspaceIds) {
+          await this.backgroundService?.stopAllForWorkspace(workspace.id);
+        }
+
+        marked = await prisma.task.updateMany({
+          where: {
+            id,
+            deletedAt: null,
+            project: { archivedAt: null },
+          },
+          data: { deletedAt },
+        });
+      },
+    );
     if (marked.count === 0) {
       const current = await prisma.task.findUnique({
         where: { id },

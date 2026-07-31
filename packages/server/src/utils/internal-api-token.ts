@@ -4,6 +4,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { resolveDataDir } from './data-dir.js';
 
 export const INTERNAL_API_TOKEN_HEADER = 'x-agent-tower-internal-token';
+export const INTERNAL_API_SESSION_ID_HEADER = 'x-agent-tower-session-id';
+export const INTERNAL_API_INVOCATION_ID_HEADER = 'x-agent-tower-invocation-id';
 export const INTERNAL_API_TOKEN_ENV = 'AGENT_TOWER_INTERNAL_TOKEN';
 const INTERNAL_API_TOKEN_FILE = 'internal-api-token';
 

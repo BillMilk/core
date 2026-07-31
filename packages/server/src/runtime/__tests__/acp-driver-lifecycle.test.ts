@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExecutionEnv } from '../../executors/execution-env.js';
 import { MsgStore, type NormalizedEntry } from '../../output/index.js';
 import type { RuntimeDriverEventSink } from '../contracts.js';
+import { WorkspaceBackgroundProcessManager } from '../../services/workspace-background-process-manager.js';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -134,6 +135,30 @@ beforeEach(() => {
 });
 
 describe('AcpRuntimeDriver lifecycle', () => {
+  it('does not stop a real workspace service when the ACP driver is disposed', async () => {
+    const backgroundManager = new WorkspaceBackgroundProcessManager({
+      resolveCommand: async () => process.execPath,
+    });
+    const { sink, input } = setup();
+    const session = await new AcpRuntimeDriver().open(input, sink);
+    let started: Awaited<ReturnType<typeof backgroundManager.start>> | null = null;
+
+    try {
+      started = await backgroundManager.start('service-acp', 'runtime-acp', {
+        command: process.execPath,
+        args: ['-e', 'setInterval(() => {}, 1000)'],
+        cwd: process.cwd(),
+      }, vi.fn());
+      await session.close();
+
+      expect(acpState.close).toHaveBeenCalledOnce();
+      expect(backgroundManager.has('service-acp', started.runtimeInstanceId)).toBe(true);
+    } finally {
+      await session.close();
+      await backgroundManager.stopAll().catch(() => undefined);
+    }
+  }, 15_000);
+
   it('reconciles session/load history with one entries patch', async () => {
     const { sink, input } = setup();
     const stableMessageId = `acp-message-${Buffer.from('message-1').toString('base64url')}`;

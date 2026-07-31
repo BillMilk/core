@@ -82,6 +82,7 @@ const schemaPath = path.join(serverRoot, 'prisma/schema.prisma');
 
 let prisma: PrismaClient;
 let WorkspaceService: typeof import('../workspace.service.js').WorkspaceService;
+let WorkspaceBackgroundService: typeof import('../workspace-background-service.service.js').WorkspaceBackgroundService;
 let gitRepoCounter = 0;
 
 function createGitRepoPath(label: string) {
@@ -305,8 +306,10 @@ describe('WorkspaceService TeamRun workspace lifecycle', () => {
 
     const utilsModule = await import('../../utils/index.js');
     const serviceModule = await import('../workspace.service.js');
+    const backgroundServiceModule = await import('../workspace-background-service.service.js');
     prisma = utilsModule.prisma;
     WorkspaceService = serviceModule.WorkspaceService;
+    WorkspaceBackgroundService = backgroundServiceModule.WorkspaceBackgroundService;
   });
 
   beforeEach(async () => {
@@ -791,6 +794,22 @@ describe('WorkspaceService TeamRun workspace lifecycle', () => {
     expect(reactivated.workingDir).toBe(restoredPath);
   });
 
+  it('stops workspace services on hibernate and does not restore them on reactivate', async () => {
+    const backgroundService = {
+      stopAllForWorkspace: vi.fn(async () => {}),
+    };
+    const lifecycleService = new WorkspaceService(new TeamLockService(), backgroundService as any);
+    const { task } = await createTask('hibernate background service task');
+    const workspace = await lifecycleService.create(task.id, { branchName: 'hibernate-background' });
+
+    await lifecycleService.hibernate(workspace.id);
+    expect(backgroundService.stopAllForWorkspace).toHaveBeenCalledOnce();
+    expect(backgroundService.stopAllForWorkspace).toHaveBeenCalledWith(workspace.id);
+
+    await lifecycleService.reactivate(workspace.id);
+    expect(backgroundService.stopAllForWorkspace).toHaveBeenCalledOnce();
+  });
+
   it('cleans up a worktree when the task is deleted during workspace creation', async () => {
     const { project, task } = await createTask('workspace create deleted race');
     let createdPath = '';
@@ -1211,6 +1230,115 @@ describe('WorkspaceService TeamRun workspace lifecycle', () => {
       statusCode: 403,
     });
     expect(mergeIntoWorktreeMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks merge readiness while the source workspace has an active background service', async () => {
+    const { teamRun, childWorkspace } = await createTeamRunChildMergeFixture({
+      reviewVerdict: 'APPROVED',
+    });
+    await prisma.workspaceBackgroundService.create({
+      data: {
+        workspaceId: childWorkspace.id,
+        name: 'web',
+        command: 'node',
+        desiredState: 'RUNNING',
+        runtimeState: 'RUNNING',
+      },
+    });
+
+    const response = await service.listTeamRunMergeableWorkspaces(teamRun.id);
+
+    expect(response.workspaces[0]).toMatchObject({
+      mergeReady: false,
+      blockers: expect.arrayContaining([
+        expect.objectContaining({
+          code: 'WORKSPACE_HAS_ACTIVE_SERVICE',
+          severity: 'BLOCKING',
+        }),
+      ]),
+    });
+  });
+
+  it('blocks readiness and merge when a FAILED service still owns a runtime identity', async () => {
+    const { teamRun, childWorkspace, invocation } = await createTeamRunChildMergeFixture({
+      reviewVerdict: 'APPROVED',
+    });
+    await prisma.workspaceBackgroundService.create({
+      data: {
+        workspaceId: childWorkspace.id,
+        name: 'cleanup-failed',
+        command: 'node',
+        desiredState: 'RUNNING',
+        runtimeState: 'FAILED',
+        runtimeInstanceId: 'runtime-still-owned',
+        pid: 4321,
+      },
+    });
+
+    const response = await service.listTeamRunMergeableWorkspaces(teamRun.id);
+    expect(response.workspaces[0]?.blockers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'WORKSPACE_HAS_ACTIVE_SERVICE' }),
+    ]));
+    await expect(service.merge(childWorkspace.id, {
+      lockOwnerId: invocation.id,
+      invocationId: invocation.id,
+    })).rejects.toMatchObject({ code: 'WORKSPACE_HAS_ACTIVE_SERVICE' });
+    expect(mergeIntoWorktreeMock).not.toHaveBeenCalled();
+  });
+
+  it('rechecks active background services after acquiring the merge target lock', async () => {
+    const { childWorkspace, invocation } = await createTeamRunChildMergeFixture({
+      reviewVerdict: 'APPROVED',
+    });
+    (vi.spyOn(service as any, 'withMergeTargetLock') as any).mockImplementationOnce(
+      async (_target: unknown, _ownerId: unknown, operation: () => Promise<string>) => {
+        await prisma.workspaceBackgroundService.create({
+          data: {
+            workspaceId: childWorkspace.id,
+            name: 'web',
+            command: 'node',
+            desiredState: 'RUNNING',
+            runtimeState: 'RUNNING',
+          },
+        });
+        return operation();
+      },
+    );
+
+    await expect(service.merge(childWorkspace.id, {
+      lockOwnerId: invocation.id,
+      invocationId: invocation.id,
+    })).rejects.toMatchObject({
+      code: 'WORKSPACE_HAS_ACTIVE_SERVICE',
+      statusCode: 409,
+    });
+    expect(mergeIntoWorktreeMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps a concurrent service start behind the merge lifecycle barrier until merge is final', async () => {
+    const { childWorkspace, invocation } = await createTeamRunChildMergeFixture({
+      reviewVerdict: 'APPROVED',
+    });
+    const backgroundService = new WorkspaceBackgroundService({} as any);
+    const lifecycleService = new WorkspaceService(new TeamLockService(), backgroundService);
+    let startPromise!: Promise<unknown>;
+    let startSettled = false;
+    (vi.spyOn(lifecycleService as any, 'withMergeTargetLock') as any).mockImplementationOnce(
+      async (_target: unknown, _ownerId: unknown, operation: () => Promise<string>) => {
+        startPromise = backgroundService.start(childWorkspace.id, 'web', { command: 'node' });
+        void startPromise.finally(() => { startSettled = true; }).catch(() => undefined);
+        await Promise.resolve();
+        expect(startSettled).toBe(false);
+        return operation();
+      },
+    );
+
+    await expect(lifecycleService.merge(childWorkspace.id, {
+      lockOwnerId: invocation.id,
+      invocationId: invocation.id,
+    })).resolves.toBe('child-merge-sha');
+    await expect(startPromise).rejects.toMatchObject({ code: 'WORKSPACE_NOT_ACTIVE' });
+    expect(mergeIntoWorktreeMock).toHaveBeenCalledOnce();
   });
 
   it('returns idempotent success when a TeamRun dedicated child workspace is already merged', async () => {
@@ -2174,6 +2302,33 @@ describe('WorkspaceService TeamRun workspace lifecycle', () => {
       protectedBranches: [project.mainBranch, workspace.baseBranch],
     });
     await expect(prisma.workspace.findUnique({ where: { id: workspace.id } })).resolves.toBeNull();
+  });
+
+  it('stops background services before cleanup removes a workspace directory', async () => {
+    const { project, task } = await createTask('cleanup background service task');
+    await prisma.task.update({ where: { id: task.id }, data: { status: 'DONE' } });
+    const workspace = await prisma.workspace.create({
+      data: {
+        taskId: task.id,
+        branchName: 'at/background-cleanup',
+        worktreePath: path.join(project.repoPath, '..', '.worktrees', 'at', 'background-cleanup'),
+        status: 'MERGED',
+      },
+    });
+    const backgroundService = {
+      stopAllForWorkspace: vi.fn(async (workspaceId: string) => {
+        expect(workspaceId).toBe(workspace.id);
+        expect(removeWorktreeMock).not.toHaveBeenCalledWith(workspace.worktreePath);
+        await expect(prisma.workspace.findUnique({ where: { id: workspace.id } })).resolves.not.toBeNull();
+      }),
+      releaseLogsForWorkspace: vi.fn(async () => {}),
+    };
+    const lifecycleService = new WorkspaceService(new TeamLockService(), backgroundService as any);
+
+    await expect(lifecycleService.cleanup()).resolves.toBe(1);
+    expect(backgroundService.stopAllForWorkspace).toHaveBeenCalledOnce();
+    expect(backgroundService.releaseLogsForWorkspace).toHaveBeenCalledWith(workspace.id);
+    expect(removeWorktreeMock).toHaveBeenCalledWith(workspace.worktreePath);
   });
 
   it('cleans up stale managed TeamRun nested worktree records', async () => {

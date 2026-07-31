@@ -11,6 +11,7 @@ import { registerTaskTools } from './tools/tasks.js';
 import { registerProviderTools } from './tools/providers.js';
 import { registerWorkspaceTools } from './tools/workspaces.js';
 import { registerSessionTools } from './tools/sessions.js';
+import { registerWorkspaceServiceTools } from './tools/workspace-services.js';
 
 type McpRoomMessage = Record<string, unknown>;
 type McpTeamMemberSummary = { id: string; name?: string };
@@ -521,10 +522,12 @@ function registerTeamRoomTools(server: McpServer, client: AgentTowerClient, cont
 
 export async function createMcpServer(
   baseUrl: string,
-  options: { internalApiToken?: string } = {},
+  options: { internalApiToken?: string; agentApiCredential?: string } = {},
 ): Promise<McpServer> {
   const client = new AgentTowerClient(baseUrl);
+  client.setAgentApiCredential(options.agentApiCredential);
   client.setInternalApiToken(options.internalApiToken);
+  client.setSessionId(process.env.AGENT_TOWER_SESSION_ID);
   const context = await fetchContext(client);
   client.setInvocationId(process.env.AGENT_TOWER_INVOCATION_ID ?? context?.invocationId);
 
@@ -538,6 +541,10 @@ export async function createMcpServer(
   registerTaskTools(server, client);
   registerProviderTools(server, client);
   registerWorkspaceTools(server, client, context, {
+    resolveBoundTeamRunId,
+    requireCurrentMemberCapabilities,
+  });
+  registerWorkspaceServiceTools(server, client, context, {
     resolveBoundTeamRunId,
     requireCurrentMemberCapabilities,
   });

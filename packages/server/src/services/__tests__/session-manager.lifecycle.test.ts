@@ -8,6 +8,20 @@ import type { PrismaClient } from '@prisma/client';
 import { AgentType, SessionStatus, TaskStatus } from '../../types/index.js';
 import { EventBus } from '../../core/event-bus.js';
 import type { EarlyPtyEvent } from '../../executors/base.executor.js';
+import { RuntimeType, type RuntimeCapabilities } from '@agent-tower/shared';
+import type {
+  DriverSession,
+  RuntimeDriver,
+  RuntimeOpenInput,
+  RuntimeRunTurnInput,
+  RuntimeTurnOutcome,
+} from '../../runtime/contracts.js';
+import { StaticRuntimeRegistry } from '../../runtime/runtime-registry.js';
+import {
+  AGENT_API_CREDENTIAL_ENV,
+  clearAgentApiCredentials,
+  validateAgentApiCredential,
+} from '../../utils/agent-api-credential.js';
 
 /**
  * Session 状态与真实进程状态一致性的集成测试（真实 SQLite + 真实 parser/MsgStore/Pipeline，
@@ -64,6 +78,8 @@ const schemaPath = path.join(serverRoot, 'prisma/schema.prisma');
 let prisma: PrismaClient;
 let SessionManager: typeof import('../session-manager.js').SessionManager;
 let sessionMsgStoreManager: typeof import('../../output/index.js').sessionMsgStoreManager;
+let WorkspaceBackgroundService: typeof import('../workspace-background-service.service.js').WorkspaceBackgroundService;
+let WorkspaceBackgroundProcessManager: typeof import('../workspace-background-process-manager.js').WorkspaceBackgroundProcessManager;
 
 /** 可手动触发事件的 fake PTY，语义对齐 node-pty（不重放事件） */
 class ControlledPty {
@@ -106,6 +122,16 @@ function spawnResultFor(pty: ControlledPty, earlyEvents: EarlyPtyEvent[] = []) {
       return earlyEvents;
     },
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 async function createSessionFixture(options: { providerId?: string } = {}) {
@@ -161,9 +187,13 @@ describe('SessionManager session status vs real process state', () => {
     const utilsModule = await import('../../utils/index.js');
     const sessionManagerModule = await import('../session-manager.js');
     const outputModule = await import('../../output/index.js');
+    const backgroundServiceModule = await import('../workspace-background-service.service.js');
+    const backgroundManagerModule = await import('../workspace-background-process-manager.js');
     prisma = utilsModule.prisma;
     SessionManager = sessionManagerModule.SessionManager;
     sessionMsgStoreManager = outputModule.sessionMsgStoreManager;
+    WorkspaceBackgroundService = backgroundServiceModule.WorkspaceBackgroundService;
+    WorkspaceBackgroundProcessManager = backgroundManagerModule.WorkspaceBackgroundProcessManager;
   });
 
   beforeEach(async () => {
@@ -171,6 +201,7 @@ describe('SessionManager session status vs real process state', () => {
     getProviderByIdMock.mockReturnValue(null);
     getExecutorByProviderMock.mockReset();
     getExecutorByProviderMock.mockImplementation(createMockExecutor);
+    clearAgentApiCredentials();
     await prisma.executionProcess.deleteMany();
     await prisma.session.deleteMany();
     await prisma.workspace.deleteMany();
@@ -344,9 +375,85 @@ describe('SessionManager session status vs real process state', () => {
     await manager.stop(session.id);
     expect(runtimeCoordinator.abandonTurn).toHaveBeenCalledWith(session.id);
     expect(runtimeCoordinator.cancelTurn).not.toHaveBeenCalled();
-    expect(runtimeCoordinator.disposeSession).not.toHaveBeenCalled();
+    expect(runtimeCoordinator.disposeSession).toHaveBeenCalledWith(session.id);
     expect((await prisma.session.findUnique({ where: { id: session.id } }))?.status)
       .toBe(SessionStatus.CANCELLED);
+    await manager.destroyAll();
+  });
+
+  it('keeps an ACP DriverSession credential valid across completed follow-up and revokes it on stop', async () => {
+    const provider = {
+      id: 'credential-acp-provider',
+      name: 'Credential ACP Provider',
+      agentType: AgentType.CODEX,
+      runtimeType: RuntimeType.ACP,
+      env: {},
+      config: {},
+      isDefault: false,
+    };
+    getProviderByIdMock.mockReturnValue(provider);
+    const { workspace, session } = await createSessionFixture({ providerId: provider.id });
+    await prisma.session.update({
+      where: { id: session.id },
+      data: { runtimeType: RuntimeType.ACP },
+    });
+    const service = new WorkspaceBackgroundService();
+    const turns: Array<ReturnType<typeof deferred<RuntimeTurnOutcome>>> = [];
+    const observedCredentials: string[] = [];
+    let openInput: RuntimeOpenInput | undefined;
+    const capabilities: RuntimeCapabilities = {
+      loadSession: true,
+      terminalInput: false,
+      terminalResize: false,
+      permissions: true,
+    };
+    const driverSession: DriverSession = {
+      runtimeInstanceId: 'credential-acp-runtime',
+      capabilities,
+      externalSessionId: 'credential-acp-external',
+      runTurn: vi.fn(async (_turn: RuntimeRunTurnInput) => {
+        const credential = openInput?.env.get(AGENT_API_CREDENTIAL_ENV) ?? '';
+        observedCredentials.push(credential);
+        const identity = validateAgentApiCredential(credential);
+        if (!identity) throw new Error('ACP workspace-service credential is invalid');
+        await service.authorizeCaller(workspace.id, { kind: 'agent', ...identity });
+        const completion = deferred<RuntimeTurnOutcome>();
+        turns.push(completion);
+        return { completion: completion.promise };
+      }),
+      cancelTurn: vi.fn(async () => {
+        turns.at(-1)?.resolve({ stopReason: 'cancelled' });
+      }),
+      close: vi.fn(async () => undefined),
+    };
+    const driver: RuntimeDriver = {
+      type: RuntimeType.ACP,
+      open: vi.fn(async (input) => {
+        openInput = input;
+        return driverSession;
+      }),
+    };
+    const eventBus = new EventBus();
+    const manager = new SessionManager(
+      eventBus,
+      undefined,
+      new StaticRuntimeRegistry([driver]),
+    );
+    const completed = waitForEvent(eventBus, 'session:completed');
+
+    await manager.start(session.id);
+    turns[0].resolve({ stopReason: 'end_turn' });
+    await completed;
+    await vi.waitFor(() => expect(sessionMsgStoreManager.has(session.id)).toBe(false));
+
+    await manager.sendMessage(session.id, 'use workspace service again');
+    expect(observedCredentials).toHaveLength(2);
+    expect(observedCredentials[1]).toBe(observedCredentials[0]);
+    expect(validateAgentApiCredential(observedCredentials[1]!)).toMatchObject({ sessionId: session.id });
+
+    await manager.stop(session.id);
+    expect(driverSession.close).toHaveBeenCalledOnce();
+    expect(validateAgentApiCredential(observedCredentials[1]!)).toBeNull();
     await manager.destroyAll();
   });
 
@@ -388,6 +495,40 @@ describe('SessionManager session status vs real process state', () => {
     await vi.waitFor(() => {
       expect(sessionMsgStoreManager.has(session.id)).toBe(false);
     });
+  });
+
+  it('keeps a CLI DriverSession credential valid across completed follow-up and revokes it on stop', async () => {
+    const { workspace, session } = await createSessionFixture();
+    const firstPty = new ControlledPty();
+    const secondPty = new ControlledPty();
+    spawnMock
+      .mockResolvedValueOnce(spawnResultFor(firstPty))
+      .mockResolvedValueOnce(spawnResultFor(secondPty));
+    const service = new WorkspaceBackgroundService();
+    const eventBus = new EventBus();
+    const manager = new SessionManager(eventBus);
+    const completed = waitForEvent(eventBus, 'session:completed');
+
+    await manager.start(session.id);
+    const firstCredential = spawnMock.mock.calls[0]?.[0].env.get(AGENT_API_CREDENTIAL_ENV) as string;
+    const firstIdentity = validateAgentApiCredential(firstCredential);
+    expect(firstIdentity).toMatchObject({ sessionId: session.id, invocationId: null });
+    await service.authorizeCaller(workspace.id, { kind: 'agent', ...firstIdentity! });
+
+    firstPty.emitData(JSON.stringify({ type: 'turn.completed' }) + '\n');
+    await completed;
+    await vi.waitFor(() => expect(sessionMsgStoreManager.has(session.id)).toBe(false));
+    expect(validateAgentApiCredential(firstCredential)).toEqual(firstIdentity);
+
+    await manager.sendMessage(session.id, 'use workspace service again');
+    const secondCredential = spawnMock.mock.calls[1]?.[0].env.get(AGENT_API_CREDENTIAL_ENV) as string;
+    const secondIdentity = validateAgentApiCredential(secondCredential);
+    expect(secondCredential).toBe(firstCredential);
+    await service.authorizeCaller(workspace.id, { kind: 'agent', ...secondIdentity! });
+
+    await manager.stop(session.id);
+    expect(validateAgentApiCredential(secondCredential)).toBeNull();
+    await manager.destroyAll();
   });
 
   it('coalesces burst patches into a low-frequency checkpoint and still force-flushes the final snapshot', async () => {
@@ -862,4 +1003,40 @@ describe('SessionManager session status vs real process state', () => {
     expect(snapshot.entries.map((e: { content: string }) => e.content)).toContain('partial work');
     expect(sessionMsgStoreManager.has(session.id)).toBe(false);
   });
+
+  it('keeps a real workspace service alive through SessionManager and CLI disposal', async () => {
+    const { workspace, session } = await createSessionFixture();
+    const backgroundManager = new WorkspaceBackgroundProcessManager({
+      resolveCommand: async () => process.execPath,
+    });
+    const backgroundService = new WorkspaceBackgroundService(backgroundManager);
+    const pty = new ControlledPty();
+    spawnMock.mockResolvedValueOnce(spawnResultFor(pty));
+    const eventBus = new EventBus();
+    const manager = new SessionManager(eventBus);
+    let started: Awaited<ReturnType<InstanceType<typeof WorkspaceBackgroundService>['start']>> | null = null;
+
+    try {
+      started = await backgroundService.start(workspace.id, 'web', {
+        command: process.execPath,
+        args: ['-e', 'setInterval(() => {}, 1000)'],
+      });
+      const completed = waitForEvent(eventBus, 'session:completed');
+      await manager.start(session.id);
+      pty.emitExit(0);
+      await completed;
+
+      expect(backgroundManager.has(started.id, started.runtimeInstanceId)).toBe(true);
+      await manager.stop(session.id);
+
+      expect(backgroundManager.has(started.id, started.runtimeInstanceId)).toBe(true);
+      await expect(backgroundService.list(workspace.id)).resolves.toEqual([
+        expect.objectContaining({ runtimeState: 'RUNNING' }),
+      ]);
+    } finally {
+      await manager.destroyAll();
+      if (started) await backgroundService.stop(workspace.id, 'web').catch(() => undefined);
+      await backgroundManager.stopAll().catch(() => undefined);
+    }
+  }, 15_000);
 });

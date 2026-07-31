@@ -5,6 +5,7 @@ import { ClientEvents, ServerEvents } from '../events.js';
 import { SocketGateway } from '../socket-gateway.js';
 import type { AuthenticatedSocket } from '../middleware/index.js';
 import { RuntimeType } from '@agent-tower/shared';
+import { WorkspaceBackgroundProcessManager } from '../../services/workspace-background-process-manager.js';
 
 class FakeAdapter {
   rooms = new Map<string, Set<string>>();
@@ -198,4 +199,28 @@ describe('SocketGateway access auth session revocation', () => {
 
     gateway.destroy();
   });
+
+  it('does not stop a real workspace service when a socket disconnects', async () => {
+    const manager = new WorkspaceBackgroundProcessManager({
+      resolveCommand: async () => process.execPath,
+    });
+    const { namespace, gateway, terminalManager } = buildGateway();
+    const socket = makeSocket(namespace, 'socket-disconnect');
+    gateway.register(socket);
+
+    try {
+      const started = await manager.start('service-socket', 'runtime-socket', {
+        command: process.execPath,
+        args: ['-e', 'setInterval(() => {}, 1000)'],
+        cwd: process.cwd(),
+      }, vi.fn());
+      socket.receive('disconnect');
+
+      expect(terminalManager.cleanupBySocket).toHaveBeenCalledWith('socket-disconnect');
+      expect(manager.has('service-socket', started.runtimeInstanceId)).toBe(true);
+    } finally {
+      gateway.destroy();
+      await manager.stopAll().catch(() => undefined);
+    }
+  }, 15_000);
 });

@@ -272,6 +272,15 @@ describe('process-launch', () => {
     expect(invocation.args[1]).toContain('windowsHide: true')
   })
 
+  it('should keep Unix wrapper signals behind the identity adapter without child fallback', () => {
+    const invocation = buildPtyCommand(process.execPath, ['-e', 'setTimeout(() => {}, 1000)'])
+    const wrapperScript = invocation.args[1] ?? ''
+    const directChildSignals = wrapperScript.match(/child\.kill\(signal\)/g) ?? []
+
+    expect(wrapperScript).toContain('unixIdentityAdapter.signalGroup(signal)')
+    expect(directChildSignals).toHaveLength(1)
+  })
+
   it('should allow overriding the node-like runtime command', () => {
     const original = process.env.AGENT_TOWER_NODE_RUNTIME
     process.env.AGENT_TOWER_NODE_RUNTIME = '/tmp/agent-tower-node-runtime'

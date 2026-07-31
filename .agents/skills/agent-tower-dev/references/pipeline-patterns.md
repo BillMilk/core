@@ -25,7 +25,9 @@ SessionManager -> RuntimeCoordinator -> CLI Driver -> Executor / PTY / AgentPipe
 
 DriverSession 可以跨 turn 保留协议连接和 external session id，但 MsgStore 是 turn-bound 资源，必须由 `runTurn` 注入。idle DriverSession 不得捕获 MsgStore，否则 SessionManager 释放 snapshot store 后，延迟 follow-up 会把输出写入失效对象并造成大对象常驻。
 
-ACP 用户停止的语义是取消当前 turn，而不是断开协议连接：先用 `session/cancel` 等待 prompt 收敛，保留健康 DriverSession 供 follow-up 复用；只有取消失败或超时才销毁连接。用户主动取消造成的 prompt rejection 不得投影为连接错误。同一 Tower Session 真正重连使用 `session/load`；agent 回放的历史必须先投影到临时 MsgStore，再与本地 snapshot 按稳定 ACP entry ID 做线性合并，本地 user message 保持权威，并以单个 `/entries` replacement patch 提交，不能逐条追加回放事件。跨 Tower Session 只续接原生上下文时优先使用 Agent 声明支持的 `session/resume`；不支持时回退 `session/load`，但 load 阶段的旧历史不得导入新的 Tower Session。
+托管 Agent 的 workspace-service opaque credential 与 DriverSession/MCP transport 同生命周期：逻辑 turn 自然完成不撤销，CLI/ACP follow-up 继续使用原 credential；DriverSession dispose、显式 Session stop/delete、启动失败和 app destroy 必须撤销。显式 stop 因此会关闭 ACP DriverSession，后续 follow-up 通过持久化 external session id 重开连接并获得新 credential；sendMessage 为替换 active turn 做的健康 cancel 仍可复用连接。
+
+ACP 在 sendMessage 替换 active turn 时先用 `session/cancel` 等待 prompt 收敛，健康 DriverSession 可供该 follow-up 复用；只有取消失败或超时才销毁连接。用户显式停止整个 Tower Session 时关闭 DriverSession，以便同步撤销其 credential。用户主动取消造成的 prompt rejection 不得投影为连接错误。同一 Tower Session 真正重连使用 `session/load`；agent 回放的历史必须先投影到临时 MsgStore，再与本地 snapshot 按稳定 ACP entry ID 做线性合并，本地 user message 保持权威，并以单个 `/entries` replacement patch 提交，不能逐条追加回放事件。跨 Tower Session 只续接原生上下文时优先使用 Agent 声明支持的 `session/resume`；不支持时回退 `session/load`，但 load 阶段的旧历史不得导入新的 Tower Session。
 
 `Session.status = RUNNING` 跟随逻辑 Runtime turn 启动，每次初始 prompt 和 follow-up 都必须在 `startTurn` 边界持久化；不能依赖 OS process `started`，因为 ACP 会跨 turn 复用同一进程。process 事件只维护 `ExecutionProcess`，停止操作也必须优先检查 active turn，再使用持久化终态作兜底。
 
