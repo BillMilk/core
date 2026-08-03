@@ -43,7 +43,7 @@ ACP Provider 沿用对应 Agent 的认证与模型配置，而不是使用一套
 
 | Agent | 连接配置 |
 | --- | --- |
-| Codex (ACP) | 内置 Codex Runtime；配置 `OPENAI_API_KEY`、API 地址、模型、推理强度、Fast 模式和 Codex TOML；第三方 OpenAI-compatible 网关会投影为独立的 Codex model provider |
+| Codex (ACP) | 内置 Codex Runtime；配置 `OPENAI_API_KEY`、API 地址、模型、推理强度、Fast 模式和 Codex TOML；官方 API Key 会在 ACP 初始化后显式认证，简单的第三方 OpenAI-compatible 地址使用 gateway 认证并投影为独立的 Codex model provider |
 | Claude Code (ACP) | 内置 Claude Runtime；配置 `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`、模型、effort 和 Claude settings JSON |
 | Qwen Code (ACP) | `OPENAI_API_KEY`、`OPENAI_BASE_URL`、模型和权限策略 |
 | Gemini CLI (ACP) | `GEMINI_API_KEY`、模型和权限策略；根据已安装版本选择 `--acp` 或 `--experimental-acp` |
@@ -54,6 +54,8 @@ ACP Provider 沿用对应 Agent 的认证与模型配置，而不是使用一套
 | Grok Build (ACP) | `OPENAI_API_KEY` 会映射为 `XAI_API_KEY`，并支持 API 地址、模型和权限策略 |
 
 启动时，通用 ACP Driver 会按 Agent Definition 将 Provider 配置投影为对应 adapter 或原生 ACP CLI 的启动参数、环境变量和 Session 配置。
+
+Codex (ACP) 配置了官方 API Key 或简单 OpenAI-compatible 网关时，会在创建 Session 前显式选择该 Provider 的认证方式，不依赖机器上已有的 Codex 登录缓存。未配置上述认证方式时仍沿用 Codex 自身的 ChatGPT/API Key 登录状态。
 
 ### Codex Fast 模式
 

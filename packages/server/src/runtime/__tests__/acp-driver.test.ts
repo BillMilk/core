@@ -32,6 +32,7 @@ describe('AcpRuntimeDriver', () => {
       OPENAI_BASE_URL: 'https://stale.example/v1',
       CODEX_API_KEY: 'stale-key',
       PROXY_ACCESS: 'stale-proxy-key',
+      DEFAULT_AUTH_REQUEST: JSON.stringify({ methodId: 'api-key', apiKey: 'stale-auth-secret' }),
     });
 
     expect(projection.permissionMode).toBe('AUTO_APPROVE');
@@ -39,8 +40,10 @@ describe('AcpRuntimeDriver', () => {
     expect(projection.appendPrompt).toBe('\nFollow repository instructions.');
     expect(projection.environment.OPENAI_BASE_URL).toBeUndefined();
     expect(projection.environment.CODEX_API_KEY).toBeUndefined();
+    expect(projection.environment.DEFAULT_AUTH_REQUEST).toBeUndefined();
     expect(projection.environment.PROXY_ACCESS).toBe('provider-secret');
     expect(projection.environment.MODEL_PROVIDER).toBe('proxy');
+    expect(projection.authenticationRequest).toBeUndefined();
     expect(JSON.parse(projection.environment.CODEX_CONFIG!)).toMatchObject({
       model: 'gpt-custom',
       model_provider: 'proxy',
@@ -81,6 +84,20 @@ describe('AcpRuntimeDriver', () => {
     expect(projection.environment.CODEX_API_KEY).toBeUndefined();
     expect(projection.environment.OPENAI_BASE_URL).toBeUndefined();
     expect(projection.environment.AGENT_TOWER_CODEX_PROVIDER_KEY).toBe('provider-secret');
+    expect(projection.authenticationRequest).toEqual({
+      methodId: 'gateway',
+      _meta: {
+        gateway: {
+          baseUrl: 'https://gateway.example/v1',
+          providerName: 'Codex ACP Gateway',
+          headers: {
+            Authorization: 'Bearer provider-secret',
+            'x-existing': 'keep',
+            originator: 'stale',
+          },
+        },
+      },
+    });
     expect(JSON.parse(projection.environment.CODEX_CONFIG!)).toMatchObject({
       model: 'gpt-gateway',
       model_provider: 'agent-tower-openai-compatible',
@@ -94,6 +111,25 @@ describe('AcpRuntimeDriver', () => {
         },
       },
     });
+  });
+
+  it('projects an official OpenAI key into explicit Codex ACP authentication', () => {
+    const projection = projectCodexAcpProvider({
+      id: 'codex-acp-openai',
+      name: 'Codex ACP OpenAI',
+      agentType: AgentType.CODEX,
+      runtimeType: RuntimeType.ACP,
+      env: { OPENAI_API_KEY: 'official-provider-secret' },
+      config: {},
+      isDefault: false,
+    }, {
+      CODEX_API_KEY: 'stale-codex-key',
+      DEFAULT_AUTH_REQUEST: JSON.stringify({ methodId: 'gateway' }),
+    });
+
+    expect(projection.environment.CODEX_API_KEY).toBe('official-provider-secret');
+    expect(projection.environment.DEFAULT_AUTH_REQUEST).toBeUndefined();
+    expect(projection.authenticationRequest).toEqual({ methodId: 'api-key' });
   });
 
   it('rejects agent identities that do not advertise ACP support', async () => {

@@ -267,10 +267,13 @@ class AcpDriverSession implements DriverSession {
         });
       const connection = app.connect(acp.ndJsonStream(streams.input, streams.output));
       this.connection = connection;
+      const clientCapabilities = mergeClientCapabilities(
+        this.definition.clientCapabilities?.(this.providerProfile),
+      );
       const initialize = connection.agent.request(acp.methods.agent.initialize, {
         protocolVersion: acp.PROTOCOL_VERSION,
         clientInfo: { name: 'agent-tower', version: '0.5.4' },
-        clientCapabilities: { session: { configOptions: { boolean: {} } } },
+        clientCapabilities,
       });
       const response = await withTimeout(
         initialize,
@@ -279,6 +282,11 @@ class AcpDriverSession implements DriverSession {
       );
       if (response.protocolVersion !== acp.PROTOCOL_VERSION) {
         throw new AgentRuntimeError('protocol_mismatch', 'initialize', 'ACP protocol version mismatch', false);
+      }
+      try {
+        await this.definition.authenticate?.(connection.agent, response, this.providerProfile);
+      } catch (error) {
+        throw normalizeAcpError(error, 'authenticate');
       }
       this.negotiatedCapabilities = {
         loadSession: response.agentCapabilities?.loadSession === true,
@@ -516,6 +524,20 @@ class AcpDriverSession implements DriverSession {
     }
     return this.currentExternalSessionId;
   }
+}
+
+function mergeClientCapabilities(additional?: acp.ClientCapabilities): acp.ClientCapabilities {
+  const session = additional?.session ?? undefined;
+  return {
+    ...additional,
+    session: {
+      ...session,
+      configOptions: {
+        ...(session?.configOptions ?? {}),
+        boolean: {},
+      },
+    },
+  };
 }
 
 function buildAcpMcpServers(env: import('../../executors/execution-env.js').ExecutionEnv): acp.McpServer[] {

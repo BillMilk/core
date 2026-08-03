@@ -27,6 +27,25 @@ export const codexAcpAgentDefinition: AcpAgentDefinition = {
     };
   },
 
+  clientCapabilities(profile) {
+    if (profile.authenticationRequest?.methodId !== 'gateway') return {};
+    return { auth: { _meta: { gateway: true } } };
+  },
+
+  async authenticate(context, response, profile) {
+    const request = profile.authenticationRequest;
+    if (!request) return;
+    if (!response.authMethods?.some(method => method.id === request.methodId)) {
+      throw new AgentRuntimeError(
+        'authentication_method_unsupported',
+        'authenticate',
+        `Codex ACP adapter did not advertise the '${request.methodId}' authentication method`,
+        false,
+      );
+    }
+    await context.request(acp.methods.agent.authenticate, request);
+  },
+
   async resolveLaunch(input, profile) {
     let adapterPath: string;
     try {

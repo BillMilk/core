@@ -165,6 +165,108 @@ describe('ACP Agent definitions', () => {
     expect(await definition.checkAvailability(codexProvider)).toEqual({ type: 'INSTALLATION_FOUND' });
   });
 
+  it('advertises and invokes the Codex gateway authentication method', async () => {
+    const definition = getAcpAgentDefinition(AgentType.CODEX);
+    const profile = definition.projectProvider(provider(AgentType.CODEX, {
+      env: { OPENAI_API_KEY: 'gateway-provider-secret' },
+      settings: 'openai_base_url = "https://gateway.example/v1"',
+    }), {});
+    const request = vi.fn().mockResolvedValue({});
+
+    expect(definition.clientCapabilities?.(profile)).toEqual({
+      auth: { _meta: { gateway: true } },
+    });
+    await definition.authenticate?.(
+      { request } as unknown as acp.ClientContext,
+      {
+        protocolVersion: acp.PROTOCOL_VERSION,
+        authMethods: [{ id: 'gateway', name: 'Custom model gateway' }],
+      },
+      profile,
+    );
+
+    expect(request).toHaveBeenCalledWith(acp.methods.agent.authenticate, profile.authenticationRequest);
+  });
+
+  it('invokes Codex API key authentication only when explicitly configured', async () => {
+    const definition = getAcpAgentDefinition(AgentType.CODEX);
+    const authenticatedProfile = definition.projectProvider(provider(AgentType.CODEX, {
+      env: { OPENAI_API_KEY: 'official-provider-secret' },
+    }), {});
+    const request = vi.fn().mockResolvedValue({});
+
+    expect(definition.clientCapabilities?.(authenticatedProfile)).toEqual({});
+    await definition.authenticate?.(
+      { request } as unknown as acp.ClientContext,
+      {
+        protocolVersion: acp.PROTOCOL_VERSION,
+        authMethods: [{ id: 'api-key', name: 'API Key' }],
+      },
+      authenticatedProfile,
+    );
+
+    expect(request).toHaveBeenCalledWith(acp.methods.agent.authenticate, { methodId: 'api-key' });
+
+    request.mockClear();
+    const globalLoginProfile = definition.projectProvider(provider(AgentType.CODEX), {});
+    await definition.authenticate?.(
+      { request } as unknown as acp.ClientContext,
+      {
+        protocolVersion: acp.PROTOCOL_VERSION,
+        authMethods: [{ id: 'api-key', name: 'API Key' }],
+      },
+      globalLoginProfile,
+    );
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unadvertised Codex authentication method without exposing its secret', async () => {
+    const definition = getAcpAgentDefinition(AgentType.CODEX);
+    const secret = 'gateway-provider-secret-sentinel';
+    const profile = definition.projectProvider(provider(AgentType.CODEX, {
+      env: { OPENAI_API_KEY: secret },
+      settings: 'openai_base_url = "https://gateway.example/v1"',
+    }), {});
+    const request = vi.fn();
+
+    let failure: unknown;
+    try {
+      await definition.authenticate?.(
+        { request } as unknown as acp.ClientContext,
+        { protocolVersion: acp.PROTOCOL_VERSION, authMethods: [] },
+        profile,
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({
+      code: 'authentication_method_unsupported',
+      stage: 'authenticate',
+    });
+    expect(String(failure)).not.toContain(secret);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('keeps authentication hooks scoped to the Codex ACP definition', () => {
+    for (const agentType of [
+      AgentType.CLAUDE_CODE,
+      AgentType.GEMINI_CLI,
+      AgentType.CURSOR_AGENT,
+      AgentType.QWEN_CODE,
+      AgentType.KIRO_CLI,
+      AgentType.OPENCODE,
+      AgentType.PI_CODING_AGENT,
+      AgentType.GROK_BUILD,
+      AgentType.MINION_CODE,
+    ]) {
+      const definition = getAcpAgentDefinition(agentType);
+      expect(definition.clientCapabilities).toBeUndefined();
+      expect(definition.authenticate).toBeUndefined();
+    }
+  });
+
   it.each([
     ['boolean', true, false, true],
     ['select', false, 'on', 'off'],

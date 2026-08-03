@@ -1,4 +1,5 @@
 import { parse as parseToml } from 'smol-toml';
+import type * as acp from '@agentclientprotocol/sdk';
 import {
   AgentType,
   type Provider,
@@ -14,6 +15,7 @@ import { AgentRuntimeError } from '../errors.js';
 export interface CodexAcpProviderProjection {
   environment: Record<string, string>;
   permissionMode: RuntimePermissionMode;
+  authenticationRequest?: acp.AuthenticateRequest;
   appendPrompt?: string;
   fastMode?: boolean;
 }
@@ -37,6 +39,13 @@ function getOrCreateModelProvider(
   return modelProvider;
 }
 
+function stringHeaders(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+  );
+}
+
 /** Project the persisted Provider into the environment contract consumed by codex-acp. */
 export function projectCodexAcpProvider(
   provider: Provider | null,
@@ -48,6 +57,7 @@ export function projectCodexAcpProvider(
   delete environment.OPENAI_BASE_URL;
   delete environment.OPENAI_API_KEY;
   delete environment.CODEX_API_KEY;
+  delete environment.DEFAULT_AUTH_REQUEST;
 
   if (!provider) {
     return { environment, permissionMode: 'ASK' };
@@ -90,8 +100,12 @@ export function projectCodexAcpProvider(
   if (typeof model === 'string' && model.trim()) codexConfig.model = model.trim();
 
   let modelProviderId = connection.modelProviderId;
+  let authenticationRequest: acp.AuthenticateRequest | undefined;
   if (connection.providerKind === 'built-in') {
-    if (connection.secret) environment.CODEX_API_KEY = connection.secret;
+    if (connection.secret) {
+      environment.CODEX_API_KEY = connection.secret;
+      authenticationRequest = { methodId: 'api-key' };
+    }
     if (connection.baseUrl) codexConfig.openai_base_url = connection.baseUrl;
 
     if (provider.config.disableResponsesWebsocket === true && connection.baseUrl) {
@@ -124,6 +138,23 @@ export function projectCodexAcpProvider(
     if (provider.config.disableResponsesWebsocket === true) {
       modelProvider.supports_websockets = false;
     }
+    if (connection.source === 'codex-openai-compatible' && connection.baseUrl) {
+      const headers = stringHeaders(modelProvider.http_headers);
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === 'authorization') delete headers[key];
+      }
+      if (connection.secret) headers.Authorization = `Bearer ${connection.secret}`;
+      authenticationRequest = {
+        methodId: 'gateway',
+        _meta: {
+          gateway: {
+            baseUrl: connection.baseUrl,
+            providerName: provider.name,
+            headers,
+          },
+        },
+      };
+    }
   }
 
   if (modelProviderId) {
@@ -144,6 +175,7 @@ export function projectCodexAcpProvider(
   return {
     environment,
     permissionMode: configuredMode === 'AUTO_APPROVE' ? 'AUTO_APPROVE' : 'ASK',
+    ...(authenticationRequest ? { authenticationRequest } : {}),
     ...(appendPrompt ? { appendPrompt } : {}),
     ...(fastMode !== undefined ? { fastMode } : {}),
   };

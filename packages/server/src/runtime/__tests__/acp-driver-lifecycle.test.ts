@@ -17,6 +17,7 @@ function deferred<T>() {
 }
 
 const acpState = vi.hoisted(() => ({
+  authMethods: [{ id: 'api-key', name: 'API Key' }] as Array<{ id: string; name: string }>,
   loadUpdates: [] as Array<{ sessionId: string; update: Record<string, unknown> }>,
   supportsResume: true,
   notificationHandler: undefined as undefined | ((request: { params: unknown }) => Promise<void>),
@@ -32,9 +33,27 @@ const acpState = vi.hoisted(() => ({
   processStops: 0,
 }));
 
+const providerState = vi.hoisted(() => ({
+  provider: null as null | {
+    id: string;
+    name: string;
+    agentType: string;
+    runtimeType: string;
+    env: Record<string, string>;
+    config: Record<string, unknown>;
+    isDefault: boolean;
+  },
+}));
+
+vi.mock('../../executors/providers.js', () => ({
+  getProviderById: vi.fn(() => providerState.provider),
+  getProviderRuntimeType: vi.fn((provider: { runtimeType?: string }) => provider.runtimeType ?? 'CLI'),
+}));
+
 vi.mock('@agentclientprotocol/sdk', () => {
   const methods = {
     agent: {
+      authenticate: 'authenticate',
       initialize: 'initialize',
       session: {
         cancel: 'session/cancel',
@@ -57,6 +76,7 @@ vi.mock('@agentclientprotocol/sdk', () => {
     if (method === methods.agent.initialize) {
       return {
         protocolVersion: 1,
+        authMethods: acpState.authMethods,
         agentCapabilities: {
           loadSession: true,
           sessionCapabilities: acpState.supportsResume ? { resume: {} } : {},
@@ -134,15 +154,93 @@ function setup() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  acpState.authMethods = [{ id: 'api-key', name: 'API Key' }];
   acpState.loadUpdates = [];
   acpState.supportsResume = true;
   acpState.notificationHandler = undefined;
   acpState.prompt = deferred<{ stopReason?: string }>();
   acpState.processStarts = 0;
   acpState.processStops = 0;
+  providerState.provider = null;
 });
 
 describe('AcpRuntimeDriver lifecycle', () => {
+  it('merges Codex gateway auth capability with the shared session capability', async () => {
+    acpState.authMethods = [{ id: 'gateway', name: 'Custom model gateway' }];
+    providerState.provider = {
+      id: 'codex-acp-gateway',
+      name: 'Codex ACP Gateway',
+      agentType: AgentType.CODEX,
+      runtimeType: RuntimeType.ACP,
+      env: {
+        OPENAI_API_KEY: 'gateway-provider-secret',
+        OPENAI_BASE_URL: 'https://gateway.example/v1',
+      },
+      config: {},
+      isDefault: false,
+    };
+    const { sink, input } = setup();
+    const session = await new AcpRuntimeDriver().open({
+      ...input,
+      providerId: providerState.provider.id,
+      externalSessionId: undefined,
+    }, sink);
+
+    expect(acpState.request).toHaveBeenNthCalledWith(1, 'initialize', expect.objectContaining({
+      clientCapabilities: {
+        auth: { _meta: { gateway: true } },
+        session: { configOptions: { boolean: {} } },
+      },
+    }));
+    expect(acpState.request).toHaveBeenNthCalledWith(2, 'authenticate', expect.objectContaining({
+      methodId: 'gateway',
+      _meta: {
+        gateway: expect.objectContaining({
+          baseUrl: 'https://gateway.example/v1',
+          headers: expect.objectContaining({ Authorization: 'Bearer gateway-provider-secret' }),
+        }),
+      },
+    }));
+
+    await session.close();
+  });
+
+  it('authenticates after initialize and before creating the first session', async () => {
+    providerState.provider = {
+      id: 'codex-acp-auth',
+      name: 'Codex ACP Auth',
+      agentType: AgentType.CODEX,
+      runtimeType: RuntimeType.ACP,
+      env: { OPENAI_API_KEY: 'lifecycle-provider-secret' },
+      config: {},
+      isDefault: false,
+    };
+    const { sink, input } = setup();
+    const session = await new AcpRuntimeDriver().open({
+      ...input,
+      providerId: providerState.provider.id,
+      externalSessionId: undefined,
+    }, sink);
+    const turn = await session.runTurn({
+      turnId: 'turn-auth',
+      prompt: 'start authenticated session',
+      msgStore: new MsgStore(),
+    }, sink);
+
+    const methods = vi.mocked(acpState.request).mock.calls.map(([method]) => method);
+    expect(methods.slice(0, 4)).toEqual([
+      'initialize',
+      'authenticate',
+      'session/new',
+      'session/prompt',
+    ]);
+    expect(acpState.request).toHaveBeenCalledWith('authenticate', { methodId: 'api-key' });
+
+    await session.cancelTurn('turn-auth');
+    await turn.completion;
+    await session.close();
+  });
+
   it('does not stop a real workspace service when the ACP driver is disposed', async () => {
     const backgroundManager = new WorkspaceBackgroundProcessManager({
       resolveCommand: async () => process.execPath,

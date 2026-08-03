@@ -11,6 +11,7 @@ export interface AcpAgentProfile {
   agentType: AgentType;
   environment: Record<string, string>;
   permissionMode: RuntimePermissionMode;
+  authenticationRequest?: acp.AuthenticateRequest;
   appendPrompt?: string;
   model?: string;
   effort?: string;
@@ -41,6 +42,12 @@ export interface AcpAgentDefinition {
   projectProvider(provider: Provider | null, inheritedEnvironment: Record<string, string>): AcpAgentProfile;
   resolveLaunch(input: RuntimeOpenInput, profile: AcpAgentProfile): Promise<AcpLaunchSpec>;
   checkAvailability(provider: Provider): Promise<AvailabilityInfo>;
+  clientCapabilities?(profile: AcpAgentProfile): acp.ClientCapabilities;
+  authenticate?(
+    context: acp.ClientContext,
+    response: acp.InitializeResponse,
+    profile: AcpAgentProfile,
+  ): Promise<void>;
   sessionMetadata?(profile: AcpAgentProfile): { _meta: Record<string, unknown> };
   configureSession?(
     context: acp.ClientContext,
