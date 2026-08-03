@@ -13,6 +13,7 @@ import {
   previewLocationToTarget,
   resolvePreviewNavigation,
 } from '@/lib/preview-navigation'
+import { agentVisualizationUrl } from '@/lib/message-intent'
 
 interface PreviewPanelProps {
   workspaceId?: string
@@ -21,9 +22,13 @@ interface PreviewPanelProps {
   onNavigationRequestHandled?: (requestId: number) => void
 }
 
+export type PreviewSource =
+  | { kind: 'web'; url: string }
+  | { kind: 'visualization'; sessionId: string; file: string }
+
 export interface PreviewOpenRequest {
   id: number
-  url: string
+  source: PreviewSource
   workspaceId?: string
 }
 
@@ -31,6 +36,12 @@ interface PreviewBrowserState {
   target: string | null
   address: string
   iframeSrc: string | null
+  isFrameLoading: boolean
+}
+
+interface VisualizationBrowserState {
+  source: Extract<PreviewSource, { kind: 'visualization' }>
+  iframeSrc: string
   isFrameLoading: boolean
 }
 
@@ -68,14 +79,17 @@ function PreviewPanelContent({
   onNavigationRequestHandled,
 }: PreviewPanelProps) {
   const { t } = useI18n()
-  const { data: status, isLoading, refetch, isFetching } = usePreviewStatus(workspaceId)
+  const [visualization, setVisualization] = useState<VisualizationBrowserState | null>(null)
+  const visualizationRequested = navigationRequest?.source.kind === 'visualization'
+  const webPreviewEnabled = !visualizationRequested && !visualization
+  const { data: status, isLoading, refetch, isFetching } = usePreviewStatus(workspaceId, webPreviewEnabled)
   const updateConfig = useUpdatePreviewConfig(workspaceId)
   const {
     session: previewSession,
     isOpening: isSessionOpening,
     error: sessionError,
     retry: retrySession,
-  } = usePreviewSession(workspaceId, status)
+  } = usePreviewSession(workspaceId, status, webPreviewEnabled)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const addressInputRef = useRef<HTMLInputElement | null>(null)
   const pendingPathRef = useRef<string | null>(null)
@@ -121,10 +135,10 @@ function PreviewPanelContent({
     sessionOriginRef.current = sessionOrigin
 
     setBrowser((current) => {
-      const requestedNavigation = navigationRequest
+      const requestedNavigation = navigationRequest?.source.kind === 'web'
         && handledNavigationRequestRef.current !== navigationRequest.id
         ? resolvePreviewNavigation(
-            navigationRequest.url,
+            navigationRequest.source.url,
             previewSession.target,
             previewSession.viewUrl,
           )
@@ -160,7 +174,9 @@ function PreviewPanelContent({
       return {
         target: previewSession.target,
         address: requestedNavigation?.kind === 'proxy'
-          ? navigationRequest?.url ?? current.address
+          ? navigationRequest?.source.kind === 'web'
+            ? navigationRequest.source.url
+            : current.address
           : current.address || previewSession.target,
         iframeSrc,
         isFrameLoading: Boolean(iframeSrc),
@@ -179,6 +195,7 @@ function PreviewPanelContent({
       previewSession?.viewUrl ?? null,
     )
     if (!navigation || !workspaceId) return
+    setVisualization(null)
 
     if (navigation.kind === 'proxy') {
       if (openInNewTab) {
@@ -224,17 +241,32 @@ function PreviewPanelContent({
   }, [previewSession?.viewUrl, readOnly, status?.target, t, updateConfig, workspaceId])
 
   useEffect(() => {
-    if (!navigationRequest || isLoading) return
+    if (!navigationRequest) return
     if (handledNavigationRequestRef.current === navigationRequest.id) return
+    if (navigationRequest.source.kind === 'web' && isLoading) return
     const timer = window.setTimeout(() => {
       handledNavigationRequestRef.current = navigationRequest.id
       onNavigationRequestHandled?.(navigationRequest.id)
-      void navigateToAddress(navigationRequest.url)
+      if (navigationRequest.source.kind === 'visualization') {
+        setVisualization({
+          source: navigationRequest.source,
+          iframeSrc: agentVisualizationUrl(
+            navigationRequest.source.sessionId,
+            navigationRequest.source.file,
+          ),
+          isFrameLoading: true,
+        })
+        setIframeKey((key) => key + 1)
+      } else {
+        setVisualization(null)
+        void navigateToAddress(navigationRequest.source.url)
+      }
     }, 0)
     return () => window.clearTimeout(timer)
   }, [isLoading, navigateToAddress, navigationRequest, onNavigationRequestHandled])
 
   useEffect(() => {
+    if (visualization) return
     const handleMessage = (event: MessageEvent<PreviewBridgeMessage>) => {
       if (event.source !== iframeRef.current?.contentWindow) return
       const message = event.data
@@ -264,7 +296,7 @@ function PreviewPanelContent({
 
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [browser.target, navigateToAddress, patchBrowserState, previewSession?.viewUrl, status?.target])
+  }, [browser.target, navigateToAddress, patchBrowserState, previewSession?.viewUrl, status?.target, visualization])
 
   const postPreviewAction = (action: 'back' | 'forward' | 'reload' | 'stop') => {
     iframeRef.current?.contentWindow?.postMessage({ source: PREVIEW_HOST_SOURCE, action }, '*')
@@ -276,6 +308,12 @@ function PreviewPanelContent({
   }
 
   const handleRefresh = async () => {
+    if (visualization) {
+      setVisualization((current) => current ? { ...current, isFrameLoading: true } : current)
+      setIframeKey((key) => key + 1)
+      return
+    }
+
     const result = await refetch()
     if (!result.data?.ready) {
       patchBrowserState({
@@ -295,6 +333,10 @@ function PreviewPanelContent({
   }
 
   const handleOpenInNewTab = () => {
+    if (visualization) {
+      window.open(visualization.iframeSrc, '_blank', 'noopener,noreferrer')
+      return
+    }
     if (!previewSession?.viewUrl) return
     const navigation = resolvePreviewNavigation(
       browser.address || previewSession.target,
@@ -313,7 +355,9 @@ function PreviewPanelContent({
     )
   }
 
-  const busy = isLoading || isFetching || updateConfig.isPending || isSessionOpening
+  const activeIframeSrc = visualization?.iframeSrc ?? browser.iframeSrc
+  const isVisualizationMode = Boolean(visualization)
+  const busy = !isVisualizationMode && (isLoading || isFetching || updateConfig.isPending || isSessionOpening)
 
   return (
     <div className="h-full flex flex-col bg-white">
@@ -323,8 +367,14 @@ function PreviewPanelContent({
             type="button"
             size="icon-sm"
             variant="ghost"
-            onClick={() => postPreviewAction('back')}
-            disabled={!browser.iframeSrc}
+            onClick={() => {
+              if (isVisualizationMode) {
+                setVisualization(null)
+              } else {
+                postPreviewAction('back')
+              }
+            }}
+            disabled={!isVisualizationMode && !browser.iframeSrc}
             title={t('Back')}
             aria-label={t('Back')}
           >
@@ -335,7 +385,7 @@ function PreviewPanelContent({
             size="icon-sm"
             variant="ghost"
             onClick={() => postPreviewAction('forward')}
-            disabled={!browser.iframeSrc}
+            disabled={isVisualizationMode || !browser.iframeSrc}
             title={t('Forward')}
             aria-label={t('Forward')}
           >
@@ -345,29 +395,29 @@ function PreviewPanelContent({
             type="button"
             size="icon-sm"
             variant="ghost"
-            onClick={browser.isFrameLoading
+            onClick={!isVisualizationMode && browser.isFrameLoading
               ? () => {
                   postPreviewAction('stop')
                   patchBrowserState({ isFrameLoading: false })
                 }
               : handleRefresh}
-            disabled={!browser.isFrameLoading && isFetching}
-            title={browser.isFrameLoading ? t('Stop loading') : t('Refresh preview')}
-            aria-label={browser.isFrameLoading ? t('Stop loading') : t('Refresh preview')}
+            disabled={!isVisualizationMode && !browser.isFrameLoading && isFetching}
+            title={!isVisualizationMode && browser.isFrameLoading ? t('Stop loading') : t('Refresh preview')}
+            aria-label={!isVisualizationMode && browser.isFrameLoading ? t('Stop loading') : t('Refresh preview')}
           >
-            {browser.isFrameLoading ? <X /> : isFetching ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            {!isVisualizationMode && browser.isFrameLoading ? <X /> : isFetching ? <Loader2 className="animate-spin" /> : <RefreshCw />}
           </Button>
 
           <form className="relative min-w-0 flex-1" onSubmit={handleSubmit}>
             <Globe2 className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-neutral-400" />
             <input
               ref={addressInputRef}
-              value={browser.address}
+              value={visualization?.source.file ?? browser.address}
               onChange={(event) => patchBrowserState({ address: event.target.value })}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault()
               }}
-              disabled={readOnly || updateConfig.isPending}
+              disabled={isVisualizationMode || readOnly || updateConfig.isPending}
               placeholder={formatHint()}
               aria-label={t('Preview address')}
               className="h-8 w-full min-w-0 rounded-md border border-neutral-200 bg-white pl-8 pr-2.5 text-xs text-neutral-800 outline-none transition-colors placeholder:text-neutral-400 focus:border-neutral-400 disabled:bg-neutral-100 disabled:text-neutral-400"
@@ -379,7 +429,7 @@ function PreviewPanelContent({
             size="icon-sm"
             variant="ghost"
             onClick={handleOpenInNewTab}
-            disabled={!browser.iframeSrc}
+            disabled={!activeIframeSrc}
             title={t('Open preview in new tab')}
             aria-label={t('Open preview in new tab')}
           >
@@ -389,7 +439,9 @@ function PreviewPanelContent({
 
         <div className="mt-1 flex min-h-4 items-center justify-between gap-2 px-1 text-[11px] leading-4">
           <span className="truncate text-neutral-500">
-            {busy
+            {isVisualizationMode
+              ? t('Viewing agent visualization')
+              : busy
               ? t('Checking preview target...')
               : sessionError
                 ? sessionError.message
@@ -399,21 +451,31 @@ function PreviewPanelContent({
                     ? `${t('Preview target is not reachable')}${status.error ? `: ${status.error}` : ''}`
                     : t('Enter a local preview URL on the Agent Tower machine.')}
           </span>
-          <span className="shrink-0 text-neutral-400">{t('Loopback only')}</span>
+          <span className="shrink-0 text-neutral-400">
+            {isVisualizationMode ? t('Session file') : t('Loopback only')}
+          </span>
         </div>
       </div>
 
       <div className="relative flex-1 min-h-0 bg-white">
-        {browser.iframeSrc ? (
+        {activeIframeSrc ? (
           <iframe
             key={iframeKey}
             ref={iframeRef}
-            src={browser.iframeSrc}
+            src={activeIframeSrc}
             title={t('Preview')}
             className="absolute inset-0 h-full w-full border-0 bg-white"
-            sandbox="allow-downloads allow-forms allow-modals allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts"
+            sandbox={isVisualizationMode
+              ? 'allow-modals allow-pointer-lock allow-presentation allow-scripts'
+              : 'allow-downloads allow-forms allow-modals allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts'}
             allow="clipboard-read; clipboard-write; fullscreen"
-            onLoad={() => patchBrowserState({ isFrameLoading: false })}
+            onLoad={() => {
+              if (isVisualizationMode) {
+                setVisualization((current) => current ? { ...current, isFrameLoading: false } : current)
+              } else {
+                patchBrowserState({ isFrameLoading: false })
+              }
+            }}
           />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center px-4 text-center text-sm text-neutral-500">

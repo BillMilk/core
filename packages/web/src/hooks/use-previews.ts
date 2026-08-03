@@ -12,14 +12,14 @@ function resolvePreviewStatus(status: PreviewStatus): PreviewStatus {
   }
 }
 
-export function usePreviewStatus(workspaceId?: string) {
+export function usePreviewStatus(workspaceId?: string, enabled = true) {
   return useQuery({
     queryKey: queryKeys.previews.status(workspaceId ?? ''),
     queryFn: async () => {
       const status = await apiClient.get<PreviewStatus>(`/previews/${workspaceId}/status`)
       return resolvePreviewStatus(status)
     },
-    enabled: Boolean(workspaceId),
+    enabled: Boolean(workspaceId) && enabled,
     refetchOnWindowFocus: false,
   })
 }
@@ -44,14 +44,18 @@ function currentPreviewMode(): 'local' | 'remote' {
   return window.location.protocol === 'https:' ? 'remote' : 'local'
 }
 
-export function usePreviewSession(workspaceId: string | undefined, status: PreviewStatus | undefined) {
+export function usePreviewSession(
+  workspaceId: string | undefined,
+  status: PreviewStatus | undefined,
+  enabled = true,
+) {
   const [session, setSession] = useState<PreviewSession | null>(null)
   const [isOpening, setIsOpening] = useState(false)
   const [error, setError] = useState<Error | null>(null)
   const [generation, setGeneration] = useState(0)
 
   useEffect(() => {
-    if (!workspaceId || !status?.ready || !status.target) {
+    if (!enabled || !workspaceId || !status?.ready || !status.target) {
       setSession(null)
       setIsOpening(false)
       setError(null)
@@ -117,7 +121,7 @@ export function usePreviewSession(workspaceId: string | undefined, status: Previ
       if (heartbeatTimer !== null) window.clearInterval(heartbeatTimer)
       if (sessionId) release(sessionId)
     }
-  }, [generation, status?.ready, status?.target, workspaceId])
+  }, [enabled, generation, status?.ready, status?.target, workspaceId])
 
   return {
     session,

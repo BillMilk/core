@@ -246,6 +246,7 @@ export function AgentSessionPanel({
             ) : (
               <LogStream
                 logs={logs}
+                downloadSessionId={sessionId}
                 isOutputActive={isOutputActive}
                 lastExitAt={lastExitAt}
                 onUserToggleDetails={stopScroll}

@@ -121,6 +121,8 @@ Merge readiness 和实际 merge 锁内都会检查后台服务；候选 workspac
 | `POST` | `/api/sessions/:id/stop` | 停止 session |
 | `POST` | `/api/sessions/:id/message` | 给 session 发送消息 |
 | `GET` | `/api/sessions/:id/logs` | 获取日志快照 |
+| `GET` | `/api/sessions/:id/visualizations/:file` | 读取当前 Codex thread 的内联可视化 HTML |
+| `GET` | `/api/sessions/:id/artifacts/download?path=...` | 校验并下载 Session 声明的持久化产物 |
 
 ## Conversations
 

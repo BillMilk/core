@@ -395,12 +395,32 @@ model Session {
   logSnapshot    String? // 序列化的 NormalizedConversation JSON，session 结束时持久化
   tokenUsage     String? // JSON: { totalTokens, modelContextWindow? }
   processes      ExecutionProcess[]
+  artifacts      AgentArtifact[]
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
 
   @@index([workspaceId])
   @@index([context])
   @@index([workspaceId, purpose, createdAt])
+}
+
+// Agent 输出并由 Agent Tower 持久化的可下载产物
+model AgentArtifact {
+  id           String   @id @default(uuid())
+  sessionId    String
+  session      Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sourcePath   String
+  originalName String
+  mimeType     String
+  sizeBytes    Int
+  storagePath  String
+  hash         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([sessionId, sourcePath])
+  @@index([sessionId])
+  @@index([hash])
 }
 
 // 执行进程

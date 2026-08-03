@@ -150,6 +150,48 @@ function createRoomMessage(content: string): RoomMessage {
   };
 }
 
+function createSourcedTeamRun(): TeamRun {
+  return {
+    ...teamRun,
+    members: [{
+      id: 'member-1',
+      teamRunId: teamRun.id,
+      name: 'Builder',
+      aliases: [],
+      providerId: 'provider-1',
+      rolePrompt: '',
+      capabilities: {
+        readRoom: true,
+        postRoomMessage: true,
+        mentionMembers: true,
+        stopMemberWork: false,
+        markReadyForReview: true,
+        readFiles: true,
+        writeFiles: true,
+        runCommands: true,
+        readDiff: true,
+        mergeWorkspace: false,
+      },
+      workspacePolicy: 'dedicated',
+      triggerPolicy: 'MENTION_ONLY',
+      sessionPolicy: 'new_per_request',
+      queueManagementPolicy: 'own_only',
+      membershipStatus: 'ACTIVE',
+      status: 'IDLE',
+    }],
+    invocations: [{
+      id: 'invocation-1',
+      teamRunId: teamRun.id,
+      workRequestId: 'request-1',
+      memberId: 'member-1',
+      workspaceId: 'workspace-member-1',
+      sessionId: 'session-member-1',
+      status: 'COMPLETED',
+      roomReplyReminderCount: 0,
+    }],
+  } as TeamRun;
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -391,44 +433,7 @@ describe('RoomTimeline optimistic sending', () => {
       senderId: 'member-1',
       senderInvocationId: 'invocation-1',
     } as RoomMessage;
-    const sourcedTeamRun = {
-      ...teamRun,
-      members: [{
-        id: 'member-1',
-        teamRunId: teamRun.id,
-        name: 'Builder',
-        aliases: [],
-        providerId: 'provider-1',
-        rolePrompt: '',
-        capabilities: {
-          readRoom: true,
-          postRoomMessage: true,
-          mentionMembers: true,
-          stopMemberWork: false,
-          markReadyForReview: true,
-          readFiles: true,
-          writeFiles: true,
-          runCommands: true,
-          readDiff: true,
-          mergeWorkspace: false,
-        },
-        workspacePolicy: 'dedicated',
-        triggerPolicy: 'MENTION_ONLY',
-        sessionPolicy: 'new_per_request',
-        queueManagementPolicy: 'own_only',
-        membershipStatus: 'ACTIVE',
-        status: 'IDLE',
-      }],
-      invocations: [{
-        id: 'invocation-1',
-        teamRunId: teamRun.id,
-        workRequestId: 'request-1',
-        memberId: 'member-1',
-        workspaceId: 'workspace-member-1',
-        status: 'COMPLETED',
-        roomReplyReminderCount: 0,
-      }],
-    } as TeamRun;
+    const sourcedTeamRun = createSourcedTeamRun();
 
     await act(async () => {
       root.render(
@@ -452,6 +457,42 @@ describe('RoomTimeline optimistic sending', () => {
 
     expect(onOpenPreviewUrl).toHaveBeenCalledWith(
       'http://127.0.0.1:4173/dashboard',
+      'workspace-member-1',
+    );
+  });
+
+  it('opens a visualization from the session and workspace that produced the room message', async () => {
+    const onOpenVisualization = vi.fn();
+    const message = {
+      ...createRoomMessage('::codex-inline-vis{file="agent-tower-architecture.html"}'),
+      senderType: 'agent',
+      senderId: 'member-1',
+      senderInvocationId: 'invocation-1',
+    } as RoomMessage;
+    const sourcedTeamRun = createSourcedTeamRun();
+
+    await act(async () => {
+      root.render(
+        <I18nProvider>
+          <RoomTimeline
+            teamRun={sourcedTeamRun}
+            messages={[message]}
+            onSendMessage={vi.fn()}
+            onOpenVisualization={onOpenVisualization}
+          />
+        </I18nProvider>,
+      );
+    });
+
+    const button = container.querySelector<HTMLButtonElement>('button[title="Open visualization"]');
+    expect(button?.textContent).toContain('agent-tower-architecture.html');
+    await act(async () => {
+      button?.click();
+    });
+
+    expect(onOpenVisualization).toHaveBeenCalledWith(
+      'session-member-1',
+      'agent-tower-architecture.html',
       'workspace-member-1',
     );
   });

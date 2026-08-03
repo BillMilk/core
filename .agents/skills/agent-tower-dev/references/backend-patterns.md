@@ -70,6 +70,8 @@ HTTP 同时受 tunnel session 和可选 access password 保护；应用级内部
 - Preview UI 通过 `/api/previews/:workspaceId/sessions` 获取独立根路径 gateway；本地会话使用 gateway 端口，远程会话按 workspace 复用独立 Quick Tunnel。客户端每 30 秒续租，释放或失联后进入 10 分钟空闲回收；target 改变和 server shutdown 立即清理。`/view/:workspaceId` 仅保留旧客户端兼容，不再作为新 UI 主链路。
 - Gateway bootstrap 必须使用 workspace preview token 换取独立 HttpOnly Cookie；AccessAuth secret 轮换时同步使 gateway secret 失效。目标仍只允许 loopback。外层 Agent Tower 的 access/tunnel/gateway Cookie 不得转发给目标；若目标本身也是 Agent Tower，其同名认证 Cookie 必须按 workspace 改名隔离，并在转发前恢复目标原名。远程跨站 iframe 的目标 Cookie 使用 `Secure; SameSite=None; Partitioned`，同时剥离传给目标的 Cloudflare 客户端标识头，避免目标误判为自身 tunnel 流量。代理保留目标根路径、HTTP/WebSocket 和流式响应，只做 frame header、同 target 绝对 redirect、Cookie domain/basePath 与可选 bridge 注入，不恢复通用 HTML/CSS/JS 路径重写。修改 gateway、redirect、WebSocket、header、cookie 或 idle lifecycle 时运行 integration tests。
 - 文件 route 复用 realpath/root/symlink 检查，不直接读写用户拼出的路径。
+- Codex inline visualization 只从有效 `CODEX_HOME/visualizations/YYYY/MM/DD/<threadId>` 读取当前 Session snapshot 绑定的 thread 文件；文件名、realpath containment、大小和 iframe CSP/sandbox 都必须在服务端约束，不能把 Agent 返回的路径直接交给浏览器。
+- `agent-download` 是 provider-neutral 的文件交付意图。CHAT turn 的运行时 prompt 会说明 `::agent-download{file="relative/path"}`；Session 完成后从 assistant/来源 invocation 消息提取声明，将通过 workspace/conversation 身份解析、realpath/symlink/大小校验的文件复制到 `data/artifacts`，按 Session + sourcePath 记录 hash 元数据。下载只能读取校验后的持久化副本；不得把客户端提供的 workingDir 或 Agent 原始路径直接作为下载文件。
 
 ## MCP
 

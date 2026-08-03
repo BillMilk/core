@@ -54,6 +54,18 @@ Session 日志包含两层：
 
 如果 parser 能从 agent 输出中提取 token usage，前端会展示使用情况。不同 agent 的输出格式不同，所以 token usage 的完整度取决于对应 parser 支持程度。
 
+## 下载 Agent 产物
+
+Agent 创建用户需要下载的交付文件后，会在回复中输出独立一行的下载意图：
+
+```text
+::agent-download{file="output/report.pdf"}
+```
+
+路径必须相对于当前 Session 工作目录，使用正斜杠，不能包含绝对路径或 `..`。Agent Tower 会在 Session 完成时校验文件并复制到受管理的产物目录；消息中的意图会显示为下载按钮。下载读取持久化副本，因此 workspace 合并、休眠或清理后不会依赖原文件路径。
+
+服务端发布时会记录文件名、MIME、大小和 SHA-256，并在下载前再次验证受管理副本。浏览器可以确认服务器完整返回了文件，但无法确认用户是否最终在系统保存对话框中完成保存。
+
 ## Session 状态
 
 | 状态 | 说明 |

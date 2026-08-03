@@ -362,6 +362,7 @@ describe('SessionManager session status vs real process state', () => {
       towerSessionId: session.id,
       runtimeType: 'ACP',
       resumeExternalSessionId: 'external-acp-session',
+      prompt: expect.stringContaining('::agent-download{file="output/report.pdf"}'),
     }));
     expect((await prisma.session.findUnique({ where: { id: session.id } }))?.status)
       .toBe(SessionStatus.RUNNING);

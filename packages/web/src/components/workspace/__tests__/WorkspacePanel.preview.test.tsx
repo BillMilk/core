@@ -9,11 +9,12 @@ import { WorkspacePanel, type WorkspacePanelHandle } from '../WorkspacePanel'
 vi.mock('../PreviewPanel', async () => {
   const ReactModule = await import('react')
   return {
-    PreviewPanel: ({ navigationRequest }: { navigationRequest?: { id: number; url: string } }) => ReactModule.createElement(
+    PreviewPanel: ({ navigationRequest }: { navigationRequest?: { id: number; source: { kind: string; url?: string; file?: string } } }) => ReactModule.createElement(
       'div',
       {
         'data-preview-request-id': navigationRequest?.id,
-        'data-preview-url': navigationRequest?.url,
+        'data-preview-url': navigationRequest?.source.url,
+        'data-preview-file': navigationRequest?.source.file,
       },
       'Preview content',
     ),
@@ -76,7 +77,7 @@ describe('WorkspacePanel Preview navigation', () => {
 
     await render()
     await act(async () => {
-      tabRef.current?.openPreview('http://localhost:4173/dashboard')
+      tabRef.current?.openPreview({ kind: 'web', url: 'http://localhost:4173/dashboard' })
     })
 
     expect(onExpandedChange).toHaveBeenCalledWith(true)
@@ -96,7 +97,10 @@ describe('WorkspacePanel Preview navigation', () => {
           projectId="project-1"
           gitAvailable={false}
           hideChanges
-          previewRequest={{ id: 7, url: 'http://127.0.0.1:3000/login' }}
+          previewRequest={{
+            id: 7,
+            source: { kind: 'web', url: 'http://127.0.0.1:3000/login' },
+          }}
         />,
       )
     })

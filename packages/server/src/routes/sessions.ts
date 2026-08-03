@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { createReadStream } from 'node:fs';
 import { z } from 'zod';
 import { getSessionManager } from '../core/container.js';
 import { AgentType, SessionContext } from '../types/index.js';
@@ -7,6 +8,14 @@ import { prisma } from '../utils/index.js';
 import { getProviderById } from '../executors/index.js';
 import { RuntimeType } from '@agent-tower/shared';
 import { ServiceError } from '../errors.js';
+import {
+  AgentVisualizationError,
+  AgentVisualizationService,
+} from '../services/agent-visualization.service.js';
+import {
+  AgentArtifactError,
+  AgentArtifactService,
+} from '../services/agent-artifact.service.js';
 
 function buildProjectReadOnlyError(project: {
   name: string;
@@ -59,8 +68,48 @@ const resolvePermissionSchema = z.object({
   optionId: z.string().min(1).max(512),
 });
 
+const visualizationParamsSchema = z.object({
+  id: z.string().min(1),
+  file: z.string().min(1).max(255),
+});
+
+const artifactDownloadParamsSchema = z.object({
+  id: z.string().min(1),
+});
+
+const artifactDownloadQuerySchema = z.object({
+  path: z.string().min(1).max(1024),
+});
+
+const VISUALIZATION_CSP = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://esm.sh https://cdn.jsdelivr.net https://unpkg.com",
+  "style-src 'unsafe-inline' https://fonts.googleapis.com https://fonts.bunny.net",
+  "font-src data: https://fonts.gstatic.com https://fonts.bunny.net",
+  "img-src data: blob: https://cdnjs.cloudflare.com https://esm.sh https://cdn.jsdelivr.net https://unpkg.com",
+  "media-src data: blob:",
+  "connect-src 'none'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-src 'none'",
+  "frame-ancestors 'self'",
+  'sandbox allow-scripts',
+].join('; ');
+
 function isConversationSession(session: { context?: string | null; conversationId?: string | null }) {
   return session.context === SessionContext.CONVERSATION || Boolean(session.conversationId);
+}
+
+function contentDispositionAttachment(fileName: string): string {
+  const fallback = fileName
+    .replace(/[^\x20-\x7e]/g, '_')
+    .replace(/["\\]/g, '_')
+    || 'download';
+  const encoded = encodeURIComponent(fileName).replace(/[!'()*]/g, (character) => (
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  ));
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 function validateWorkspaceBackedSession(existing: {
@@ -98,6 +147,8 @@ function validateWorkspaceBackedSession(existing: {
 
 export async function sessionRoutes(app: FastifyInstance) {
   const sessionService = getSessionManager();
+  const visualizationService = new AgentVisualizationService();
+  const artifactService = new AgentArtifactService();
 
   // 创建会话
   app.post<{ Params: { workspaceId: string } }>(
@@ -170,6 +221,71 @@ export async function sessionRoutes(app: FastifyInstance) {
       }
       return parseSessionTokenUsage(session);
     }
+  );
+
+  app.get<{ Params: { id: string; file: string } }>(
+    '/sessions/:id/visualizations/:file',
+    async (request, reply) => {
+      const parsedParams = visualizationParamsSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        reply.code(400);
+        return { error: 'Validation failed', code: 'VALIDATION_ERROR', details: parsedParams.error.errors };
+      }
+      try {
+        const html = await visualizationService.read(parsedParams.data.id, parsedParams.data.file);
+        reply.header('Content-Security-Policy', VISUALIZATION_CSP);
+        reply.header('Cache-Control', 'no-store');
+        reply.header('X-Content-Type-Options', 'nosniff');
+        reply.type('text/html; charset=utf-8');
+        return reply.send(html);
+      } catch (error) {
+        if (error instanceof AgentVisualizationError) {
+          reply.code(error.statusCode);
+          return { error: error.message, code: error.code };
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.get<{ Params: { id: string }; Querystring: { path: string } }>(
+    '/sessions/:id/artifacts/download',
+    async (request, reply) => {
+      const parsedParams = artifactDownloadParamsSchema.safeParse(request.params);
+      const parsedQuery = artifactDownloadQuerySchema.safeParse(request.query);
+      if (!parsedParams.success || !parsedQuery.success) {
+        reply.code(400);
+        return {
+          error: 'Validation failed',
+          code: 'VALIDATION_ERROR',
+          details: !parsedParams.success
+            ? parsedParams.error.errors
+            : !parsedQuery.success
+              ? parsedQuery.error.errors
+              : [],
+        };
+      }
+
+      try {
+        const artifact = await artifactService.findOrPublish(
+          parsedParams.data.id,
+          parsedQuery.data.path,
+        );
+        return reply
+          .type(artifact.mimeType)
+          .header('Content-Disposition', contentDispositionAttachment(artifact.originalName))
+          .header('Content-Length', String(artifact.sizeBytes))
+          .header('Cache-Control', 'private, no-store')
+          .header('X-Content-Type-Options', 'nosniff')
+          .send(createReadStream(artifact.storagePath));
+      } catch (error) {
+        if (error instanceof AgentArtifactError) {
+          reply.code(error.statusCode);
+          return { error: error.message, code: error.code };
+        }
+        throw error;
+      }
+    },
   );
 
   // 启动会话

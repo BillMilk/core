@@ -33,6 +33,8 @@ import {
 import { createHash } from 'node:crypto';
 import { RuntimeType, supportsAgentRuntime, type RuntimeStateDto } from '@agent-tower/shared';
 import { getProviderRuntimeType } from '../executors/providers.js';
+import { appendAgentOutputIntentInstructions } from '../prompts/agent-output-intents.js';
+import { AgentArtifactService } from './agent-artifact.service.js';
 import {
   CliRuntimeDriver,
   AcpRuntimeDriver,
@@ -121,6 +123,7 @@ export class SessionManager {
   private readonly runtimeProcessIds = new Map<string, string>();
   private readonly runtimePermissionStates = new Map<string, boolean>();
   private readonly externalSessionPersistence = new Map<string, Promise<void>>();
+  private readonly artifactService = new AgentArtifactService();
   private static readonly SNAPSHOT_CHECKPOINT_MS = 15_000;
   private static readonly HEARTBEAT_THROTTLE_MS = 30_000;
 
@@ -628,7 +631,9 @@ export class SessionManager {
         env,
         externalSessionId: session.externalSessionId,
         msgStore,
-        prompt: runtimePrompt,
+        prompt: session.purpose === SessionPurpose.CHAT
+          ? appendAgentOutputIntentInstructions(runtimePrompt)
+          : runtimePrompt,
         resumeExternalSessionId,
         resumeMode,
       });
@@ -1251,6 +1256,22 @@ export class SessionManager {
         message: `Session exited with non-zero code ${exitCode}`,
         metadata: { sessionId, exitCode },
       });
+    }
+
+    if (!isFailed && session?.purpose === SessionPurpose.CHAT && this.isCurrentGeneration(sessionId, generation)) {
+      try {
+        const result = await this.artifactService.publishDeclaredArtifacts(sessionId);
+        if (result.failed > 0) {
+          console.warn(
+            `[SessionManager] Failed to publish ${result.failed} declared artifact(s) for session ${sessionId}`,
+          );
+        }
+      } catch (error) {
+        console.warn(
+          `[SessionManager] Failed to publish declared artifacts for session ${sessionId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
     }
 
     if (session?.context === SessionContext.CONVERSATION || session?.conversationId) {

@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { RoomTimeline } from '@/components/team/RoomTimeline'
 import { TeamStatusPanel } from '@/components/team/TeamStatusPanel'
 import { WorkspacePanel, type WorkspacePreviewRequest } from '@/components/workspace/WorkspacePanel'
+import type { PreviewSource } from '@/components/workspace/PreviewPanel'
 import { MobileChangesView } from './MobileChangesView'
 import { MobileHistoryView } from './MobileHistoryView'
 import { useTaskTeamRun, useRoomMessages, usePostRoomMessage } from '@/hooks/use-team-run'
@@ -410,6 +411,7 @@ export function MobileTaskDetail({ task, onBack, onDeleteTask, isDeleting, autoS
     return teamRun.members.find((member) => member.id === focusedInvocation.memberId) ?? null
   }, [focusedInvocation?.memberId, teamRun?.members])
   const displayedSession = focusedInvocationSessionId ? focusedSession : activeSession ?? null
+  const displayedSessionId = displayedSession?.id
   const displayedSessionWorkspaceId = useMemo(() => {
     if (displayedSession?.workspaceId) return displayedSession.workspaceId
     if (!displayedSession || !workspaces) return undefined
@@ -417,7 +419,7 @@ export function MobileTaskDetail({ task, onBack, onDeleteTask, isDeleting, autoS
       workspace.sessions?.some((session) => session.id === displayedSession.id)
     )?.id
   }, [displayedSession, workspaces])
-  const handleOpenPreviewUrl = useCallback((url: string, sourceWorkspaceId?: string) => {
+  const openPreviewSource = useCallback((source: PreviewSource, sourceWorkspaceId?: string) => {
     const availableSourceWorkspaceId = sourceWorkspaceId
       && workspaces?.some((workspace) => workspace.id === sourceWorkspaceId)
       ? sourceWorkspaceId
@@ -428,14 +430,25 @@ export function MobileTaskDetail({ task, onBack, onDeleteTask, isDeleting, autoS
       ?? undefined
     if (targetWorkspaceId) setExplicitWorkspaceId(targetWorkspaceId)
     previewRequestCounterRef.current += 1
-    setPreviewRequest({ id: previewRequestCounterRef.current, url, workspaceId: targetWorkspaceId })
+    setPreviewRequest({ id: previewRequestCounterRef.current, source, workspaceId: targetWorkspaceId })
     setActiveTab('workspace')
   }, [displayedSessionWorkspaceId, resolvedWorkspaceId, workspaces])
+  const handleOpenPreviewUrl = useCallback((url: string, sourceWorkspaceId?: string) => {
+    openPreviewSource({ kind: 'web', url }, sourceWorkspaceId)
+  }, [openPreviewSource])
+  const handleOpenVisualization = useCallback((sourceSessionId: string, file: string, sourceWorkspaceId?: string) => {
+    openPreviewSource({ kind: 'visualization', sessionId: sourceSessionId, file }, sourceWorkspaceId)
+  }, [openPreviewSource])
   const handleOpenDisplayedSessionPreviewUrl = useCallback((url: string) => {
     handleOpenPreviewUrl(url, displayedSessionWorkspaceId)
   }, [displayedSessionWorkspaceId, handleOpenPreviewUrl])
+  const handleOpenDisplayedSessionVisualization = useCallback((file: string) => {
+    if (displayedSessionId) {
+      handleOpenVisualization(displayedSessionId, file, displayedSessionWorkspaceId)
+    }
+  }, [displayedSessionId, displayedSessionWorkspaceId, handleOpenVisualization])
   const { isActive: isSessionActive, isCancelling: isSessionCancelling } = useSessionActivity(
-    displayedSession?.id ?? '',
+    displayedSessionId ?? '',
     displayedSession?.status,
   )
   const isReadOnlySession = useMemo(() => {
@@ -837,10 +850,12 @@ export function MobileTaskDetail({ task, onBack, onDeleteTask, isDeleting, autoS
                       ) : (
                         <LogStream
                           logs={logs}
+                          downloadSessionId={displayedSessionId}
                           isOutputActive={isOutputActive}
                           lastExitAt={lastExitAt}
                           onUserToggleDetails={stopScroll}
                           onOpenPreviewUrl={handleOpenDisplayedSessionPreviewUrl}
+                          onOpenVisualization={handleOpenDisplayedSessionVisualization}
                         />
                       )}
                     </div>
@@ -875,6 +890,7 @@ export function MobileTaskDetail({ task, onBack, onDeleteTask, isDeleting, autoS
                 compactComposer
                 workingDir={workingDir}
                 onOpenPreviewUrl={handleOpenPreviewUrl}
+                onOpenVisualization={handleOpenVisualization}
               />
             )}
           </main>
@@ -920,10 +936,12 @@ export function MobileTaskDetail({ task, onBack, onDeleteTask, isDeleting, autoS
               ) : (
                 <LogStream
                   logs={logs}
+                  downloadSessionId={displayedSessionId}
                   isOutputActive={isOutputActive}
                   lastExitAt={lastExitAt}
                   onUserToggleDetails={stopScroll}
                   onOpenPreviewUrl={handleOpenDisplayedSessionPreviewUrl}
+                  onOpenVisualization={handleOpenDisplayedSessionVisualization}
                 />
               )
             ) : (

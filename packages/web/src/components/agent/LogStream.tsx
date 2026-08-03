@@ -9,7 +9,9 @@ import {
   createMessageStreamdownComponents,
   streamdownMermaidControls,
   type OpenPreviewUrlHandler,
+  type OpenVisualizationHandler,
 } from '@/lib/streamdown-components'
+import { prepareMessageMarkdown } from '@/lib/message-intent'
 import { useStreamdownMermaidPlugins } from '@/lib/streamdown-mermaid'
 import 'streamdown/styles.css'
 
@@ -24,6 +26,8 @@ interface LogStreamProps {
   workingDir?: string
   onOpenWorkspaceFile?: (path: string, line?: number, column?: number) => void
   onOpenPreviewUrl?: OpenPreviewUrlHandler
+  onOpenVisualization?: OpenVisualizationHandler
+  downloadSessionId?: string
   /** 外部滚动容器 ref，用于滚动到底部（可选，仅 legacy 用法需要） */
   scrollElementRef?: React.RefObject<HTMLDivElement | null>
 }
@@ -220,17 +224,25 @@ const MarkdownMessage = memo(({
   workingDir,
   onOpenWorkspaceFile,
   onOpenPreviewUrl,
+  onOpenVisualization,
+  downloadSessionId,
 }: {
   content: string
   className?: string
   workingDir?: string
   onOpenWorkspaceFile?: (path: string, line?: number, column?: number) => void
   onOpenPreviewUrl?: OpenPreviewUrlHandler
+  onOpenVisualization?: OpenVisualizationHandler
+  downloadSessionId?: string
 }) => {
-  const mermaidPlugins = useStreamdownMermaidPlugins(content)
+  const markdown = useMemo(
+    () => onOpenVisualization || downloadSessionId ? prepareMessageMarkdown(content) : content,
+    [content, downloadSessionId, onOpenVisualization],
+  )
+  const mermaidPlugins = useStreamdownMermaidPlugins(markdown)
   const components = useMemo(
-    () => createMessageStreamdownComponents({ workingDir, onOpenWorkspaceFile, onOpenPreviewUrl }),
-    [onOpenPreviewUrl, onOpenWorkspaceFile, workingDir],
+    () => createMessageStreamdownComponents({ workingDir, onOpenWorkspaceFile, onOpenPreviewUrl, onOpenVisualization, downloadSessionId }),
+    [downloadSessionId, onOpenPreviewUrl, onOpenVisualization, onOpenWorkspaceFile, workingDir],
   )
 
   return (
@@ -240,7 +252,7 @@ const MarkdownMessage = memo(({
       plugins={mermaidPlugins}
       controls={mermaidPlugins ? streamdownMermaidControls : undefined}
     >
-      {content}
+      {markdown}
     </Streamdown>
   )
 })
@@ -481,9 +493,9 @@ const AgentText = memo(({ content, compact }: { content: string; compact?: boole
 AgentText.displayName = 'AgentText'
 
 // 5. Assistant Message — Streamdown 渲染 markdown
-const AssistantMessage = memo(({ content, compact, workingDir, onOpenWorkspaceFile, onOpenPreviewUrl }: { content: string; compact?: boolean; workingDir?: string; onOpenWorkspaceFile?: (path: string, line?: number, column?: number) => void; onOpenPreviewUrl?: OpenPreviewUrlHandler }) => (
+const AssistantMessage = memo(({ content, compact, workingDir, onOpenWorkspaceFile, onOpenPreviewUrl, onOpenVisualization, downloadSessionId }: { content: string; compact?: boolean; workingDir?: string; onOpenWorkspaceFile?: (path: string, line?: number, column?: number) => void; onOpenPreviewUrl?: OpenPreviewUrlHandler; onOpenVisualization?: OpenVisualizationHandler; downloadSessionId?: string }) => (
   <div className={`text-neutral-900 min-w-0 ${compact ? 'text-[13px] leading-5' : 'text-sm leading-6'}`}>
-    <MarkdownMessage className="space-y-2" content={content} workingDir={workingDir} onOpenWorkspaceFile={onOpenWorkspaceFile} onOpenPreviewUrl={onOpenPreviewUrl} />
+    <MarkdownMessage className="space-y-2" content={content} workingDir={workingDir} onOpenWorkspaceFile={onOpenWorkspaceFile} onOpenPreviewUrl={onOpenPreviewUrl} onOpenVisualization={onOpenVisualization} downloadSessionId={downloadSessionId} />
   </div>
 ))
 AssistantMessage.displayName = 'AssistantMessage'
@@ -522,6 +534,8 @@ const ProcessedGroup = memo(({
   workingDir,
   onOpenWorkspaceFile,
   onOpenPreviewUrl,
+  onOpenVisualization,
+  downloadSessionId,
 }: {
   logs: LogEntry[]
   duration: string | null
@@ -530,6 +544,8 @@ const ProcessedGroup = memo(({
   workingDir?: string
   onOpenWorkspaceFile?: (path: string, line?: number, column?: number) => void
   onOpenPreviewUrl?: OpenPreviewUrlHandler
+  onOpenVisualization?: OpenVisualizationHandler
+  downloadSessionId?: string
 }) => {
   const { t } = useI18n()
   const [isOpen, setIsOpen] = useState(false)
@@ -584,7 +600,7 @@ const ProcessedGroup = memo(({
         >
           <div className="min-h-0 overflow-hidden">
             <div className="pb-1 pt-2">
-              {renderLogItems(logs, workingDir, onOpenWorkspaceFile, onOpenPreviewUrl)}
+              {renderLogItems(logs, workingDir, onOpenWorkspaceFile, onOpenPreviewUrl, onOpenVisualization, downloadSessionId)}
             </div>
           </div>
         </div>
@@ -670,6 +686,8 @@ function renderItem(
   workingDir?: string,
   onOpenWorkspaceFile?: (path: string, line?: number, column?: number) => void,
   onOpenPreviewUrl?: OpenPreviewUrlHandler,
+  onOpenVisualization?: OpenVisualizationHandler,
+  downloadSessionId?: string,
 ): React.ReactNode {
   if (item.kind === 'execution-group') {
     return <ExecutionDetailsGroup logs={item.logs} />
@@ -700,7 +718,7 @@ function renderItem(
       return <ToolBlock type={log.type} title="Action" content={log.content} />
 
     case LogType.Assistant:
-      return <AssistantMessage content={log.content} compact={compact} workingDir={workingDir} onOpenWorkspaceFile={onOpenWorkspaceFile} onOpenPreviewUrl={onOpenPreviewUrl} />
+      return <AssistantMessage content={log.content} compact={compact} workingDir={workingDir} onOpenWorkspaceFile={onOpenWorkspaceFile} onOpenPreviewUrl={onOpenPreviewUrl} onOpenVisualization={onOpenVisualization} downloadSessionId={downloadSessionId} />
 
     case LogType.Info:
             // 跳过 token_usage_info 条目的文本渲染（已由 TokenUsageIndicator 聚合展示）
@@ -726,9 +744,11 @@ function renderLogItems(
   workingDir?: string,
   onOpenWorkspaceFile?: (path: string, line?: number, column?: number) => void,
   onOpenPreviewUrl?: OpenPreviewUrlHandler,
+  onOpenVisualization?: OpenVisualizationHandler,
+  downloadSessionId?: string,
 ): React.ReactNode {
   return groupExecutionDetails(logs).map((item) => {
-    const node = renderItem(item, false, workingDir, onOpenWorkspaceFile, onOpenPreviewUrl)
+    const node = renderItem(item, false, workingDir, onOpenWorkspaceFile, onOpenPreviewUrl, onOpenVisualization, downloadSessionId)
     return node ? <div key={item.key}>{node}</div> : null
   })
 }
@@ -741,9 +761,11 @@ function renderConversationTurn(
   workingDir?: string,
   onOpenWorkspaceFile?: (path: string, line?: number, column?: number) => void,
   onOpenPreviewUrl?: OpenPreviewUrlHandler,
+  onOpenVisualization?: OpenVisualizationHandler,
+  downloadSessionId?: string,
 ): React.ReactNode {
   const userNode = turn.user
-    ? renderLogItems([turn.user], workingDir, onOpenWorkspaceFile, onOpenPreviewUrl)
+    ? renderLogItems([turn.user], workingDir, onOpenWorkspaceFile, onOpenPreviewUrl, onOpenVisualization, downloadSessionId)
     : null
 
   if (!isCompleted) {
@@ -755,7 +777,7 @@ function renderConversationTurn(
           duration={getTurnDuration(turn, completedAt)}
           collapsible={false}
         />
-        {renderLogItems(turn.agentLogs, workingDir, onOpenWorkspaceFile, onOpenPreviewUrl)}
+        {renderLogItems(turn.agentLogs, workingDir, onOpenWorkspaceFile, onOpenPreviewUrl, onOpenVisualization, downloadSessionId)}
       </>
     )
   }
@@ -782,8 +804,10 @@ function renderConversationTurn(
         workingDir={workingDir}
         onOpenWorkspaceFile={onOpenWorkspaceFile}
         onOpenPreviewUrl={onOpenPreviewUrl}
+        onOpenVisualization={onOpenVisualization}
+        downloadSessionId={downloadSessionId}
       />
-      {renderLogItems(finalLogs, workingDir, onOpenWorkspaceFile, onOpenPreviewUrl)}
+      {renderLogItems(finalLogs, workingDir, onOpenWorkspaceFile, onOpenPreviewUrl, onOpenVisualization, downloadSessionId)}
     </>
   )
 }
@@ -791,7 +815,7 @@ function renderConversationTurn(
 // ============ Main Component ============
 
 export const LogStream = forwardRef<LogStreamHandle, LogStreamProps>(
-  function LogStream({ logs, isOutputActive, lastExitAt, onUserToggleDetails, scrollElementRef, workingDir, onOpenWorkspaceFile, onOpenPreviewUrl }, ref) {
+  function LogStream({ logs, isOutputActive, lastExitAt, onUserToggleDetails, scrollElementRef, workingDir, onOpenWorkspaceFile, onOpenPreviewUrl, onOpenVisualization, downloadSessionId }, ref) {
     const turns = useMemo(() => (
       isOutputActive === undefined ? null : splitConversationTurns(logs)
     ), [isOutputActive, logs])
@@ -834,10 +858,12 @@ export const LogStream = forwardRef<LogStreamHandle, LogStreamProps>(
                   workingDir,
                   onOpenWorkspaceFile,
                   onOpenPreviewUrl,
+                  onOpenVisualization,
+                  downloadSessionId,
                 )}
               </div>
             ))
-          : renderLogItems(logs, workingDir, onOpenWorkspaceFile, onOpenPreviewUrl)}
+          : renderLogItems(logs, workingDir, onOpenWorkspaceFile, onOpenPreviewUrl, onOpenVisualization, downloadSessionId)}
       </div>
     )
   },

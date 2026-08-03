@@ -32,5 +32,7 @@ App 只建立一个 `socketManager` 连接。全局 task、TeamRun、workspace G
 - Preview 状态与运行会话分离：`usePreviewStatus` 读取 target readiness，`usePreviewSession` 在面板挂载时申请独立 gateway URL、每 30 秒续租并在卸载时释放。本地 HTTP 页面连接 Agent Tower 主机上的 gateway 端口；HTTPS/tunnel 页面使用后端创建的独立 Quick Tunnel，不能回退为客户端自己的 loopback。
 - Preview iframe 与 gateway 跨 origin，工具栏通过注入的受控 `postMessage` bridge 同步位置和执行前进/后退/刷新；页面功能不能依赖 bridge。地址栏显示真实 target URL；同 endpoint 导航只更换 gateway path，切换端口或协议时持久化新 target 并等待新 session。新窗口必须使用带最新 bootstrap token 的 session URL。
 - Session Log 与 RoomTimeline 中的 loopback 链接是 workspace Preview 导航命令，不是客户端直接打开的普通外链。桌面展开对应 workspace 的 Preview，移动端切到 Workspace/Preview；RoomMessage 优先使用 `senderInvocationId -> invocation.workspaceId`，缺失来源时才回退当前 workspace。普通外部链接保持原行为。
+- Preview 面板支持 web target 与 Session visualization 两种来源。`codex-inline-vis` 是消息意图：按来源 Session 打开 `/api/sessions/:id/visualizations/:file`，不创建 loopback gateway；两种来源复用同一 `PreviewPanel`，但 visualization 禁用地址编辑和历史导航。
+- 消息中的 `agent-download` 按来源 Session 渲染为 `/api/sessions/:id/artifacts/download?path=...` 下载链接；Session Log 使用当前显示 Session，Team Room 使用 `senderInvocationId` 对应的来源 Session。不要从显示文本猜下载语义，也不要回退成浏览器直接访问 workspace 路径。
 
 测试重点覆盖 cache rollback/upsert、Socket listener cleanup/reconnect、mention/visibility 和 workspace 模式分支。用户可见交互再验证桌面与移动 viewport。

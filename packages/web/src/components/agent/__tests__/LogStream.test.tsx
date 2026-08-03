@@ -640,4 +640,84 @@ describe('LogStream tool grouping', () => {
     })
     expect(onOpenPreviewUrl).not.toHaveBeenCalled()
   })
+
+  it('routes Codex inline visualization directives to the visualization handler', async () => {
+    const onOpenVisualization = vi.fn()
+    const content = '::codex-inline-vis{file="agent-tower-architecture.html"}'
+
+    await act(async () => {
+      root.render(
+        <LogStream
+          logs={[assistantEntry('assistant-visualization', content)]}
+          onOpenVisualization={onOpenVisualization}
+        />,
+      )
+    })
+
+    const call = [...streamdownRenderCalls].reverse().find((item) => (
+      typeof item.children === 'string'
+      && item.children.includes('/__agent-tower/message-intent/codex-inline-vis')
+    ))
+    expect(call?.children).toContain('/__agent-tower/message-intent/codex-inline-vis')
+    const Link = (call?.components as {
+      a?: ComponentType<{
+        href?: string
+        children?: ReactNode
+      }>
+    } | undefined)?.a
+    expect(Link).toBeDefined()
+    if (!Link) throw new Error('markdown link component not found')
+
+    await act(async () => {
+      root.render(
+        <Link href="/__agent-tower/message-intent/codex-inline-vis?file=agent-tower-architecture.html">
+          agent-tower-architecture.html
+        </Link>,
+      )
+    })
+    const button = container.querySelector('button')
+    expect(button?.textContent).toContain('agent-tower-architecture.html')
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(onOpenVisualization).toHaveBeenCalledWith('agent-tower-architecture.html')
+  })
+
+  it('renders agent download directives as session-scoped download links', async () => {
+    const content = '::agent-download{file="output/final-report.pdf"}'
+
+    await act(async () => {
+      root.render(
+        <LogStream
+          logs={[assistantEntry('assistant-download', content)]}
+          downloadSessionId="session/1"
+        />,
+      )
+    })
+
+    const call = [...streamdownRenderCalls].reverse().find((item) => (
+      typeof item.children === 'string'
+      && item.children.includes('/__agent-tower/message-intent/agent-download')
+    ))
+    const Link = (call?.components as {
+      a?: ComponentType<{
+        href?: string
+        children?: ReactNode
+      }>
+    } | undefined)?.a
+    expect(Link).toBeDefined()
+    if (!Link) throw new Error('markdown link component not found')
+
+    await act(async () => {
+      root.render(
+        <Link href="/__agent-tower/message-intent/agent-download?file=output%2Ffinal-report.pdf">
+          output/final-report.pdf
+        </Link>,
+      )
+    })
+
+    const anchor = container.querySelector('a')
+    expect(anchor?.getAttribute('href')).toContain('/sessions/session%2F1/artifacts/download?path=output%2Ffinal-report.pdf')
+    expect(anchor?.getAttribute('download')).toBe('final-report.pdf')
+  })
 })

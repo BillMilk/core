@@ -1,15 +1,21 @@
 import type { AnchorHTMLAttributes, ImgHTMLAttributes, LiHTMLAttributes, MouseEvent } from 'react'
 import type { Components, ExtraProps, StreamdownProps } from 'streamdown'
+import { ChartNoAxesCombined, Download } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/lib/i18n'
 import { localImageUrl, resolveMessageResource, workspaceImageUrl } from '@/lib/message-resource'
+import { agentArtifactDownloadUrl, resolveMessageIntent } from '@/lib/message-intent'
 import { isLoopbackPreviewUrl } from '@/lib/preview-navigation'
 
 export type OpenPreviewUrlHandler = (url: string) => void
+export type OpenVisualizationHandler = (file: string) => void
 
 interface MessageComponentOptions {
   workingDir?: string
   onOpenWorkspaceFile?: (path: string, line?: number, column?: number) => void
   onOpenPreviewUrl?: OpenPreviewUrlHandler
+  onOpenVisualization?: OpenVisualizationHandler
+  downloadSessionId?: string
 }
 
 const BaseMarkdownImage = ({
@@ -40,16 +46,50 @@ const MarkdownLink = ({
   className,
   ...props
 }: AnchorHTMLAttributes<HTMLAnchorElement> & ExtraProps & MessageComponentOptions) => {
-  const { workingDir, onOpenWorkspaceFile, onOpenPreviewUrl } = props
+  const { t } = useI18n()
+  const { workingDir, onOpenWorkspaceFile, onOpenPreviewUrl, onOpenVisualization, downloadSessionId } = props
+  const intent = resolveMessageIntent(href)
   const resource = resolveMessageResource(href, workingDir)
   const linkProps = { ...props } as AnchorHTMLAttributes<HTMLAnchorElement> & MessageComponentOptions
   delete linkProps.workingDir
   delete linkProps.onOpenWorkspaceFile
   delete linkProps.onOpenPreviewUrl
+  delete linkProps.onOpenVisualization
+  delete linkProps.downloadSessionId
   const linkClassName = cn(
     'text-blue-600 underline decoration-blue-300 underline-offset-2 transition-colors hover:text-blue-700 hover:decoration-blue-500',
     className,
   )
+
+  if (intent?.type === 'codex-inline-visualization') {
+    if (!onOpenVisualization) return <code title={intent.file}>{intent.file}</code>
+    return (
+      <button
+        type="button"
+        onClick={() => onOpenVisualization(intent.file)}
+        title={t('Open visualization')}
+        className="inline-flex max-w-full items-center gap-1.5 align-middle font-medium text-blue-600 underline decoration-blue-300 underline-offset-2 transition-colors hover:text-blue-700 hover:decoration-blue-500"
+      >
+        <ChartNoAxesCombined className="size-4 shrink-0" aria-hidden />
+        <span className="truncate">{intent.file}</span>
+      </button>
+    )
+  }
+
+  if (intent?.type === 'agent-download') {
+    if (!downloadSessionId) return <code title={intent.file}>{intent.file}</code>
+    return (
+      <a
+        href={agentArtifactDownloadUrl(downloadSessionId, intent.file)}
+        download={intent.file.split('/').at(-1)}
+        title={t('Download file')}
+        className="inline-flex max-w-full items-center gap-1.5 align-middle font-medium text-blue-600 underline decoration-blue-300 underline-offset-2 transition-colors hover:text-blue-700 hover:decoration-blue-500"
+      >
+        <Download className="size-4 shrink-0" aria-hidden />
+        <span className="truncate">{intent.file.split('/').at(-1)}</span>
+      </a>
+    )
+  }
 
   if (onOpenPreviewUrl && isLoopbackPreviewUrl(href)) {
     const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
@@ -100,6 +140,8 @@ export function createMessageStreamdownComponents({
   workingDir,
   onOpenWorkspaceFile,
   onOpenPreviewUrl,
+  onOpenVisualization,
+  downloadSessionId,
 }: MessageComponentOptions): Components {
   return {
     ...streamdownComponents,
@@ -109,6 +151,8 @@ export function createMessageStreamdownComponents({
         workingDir={workingDir}
         onOpenWorkspaceFile={onOpenWorkspaceFile}
         onOpenPreviewUrl={onOpenPreviewUrl}
+        onOpenVisualization={onOpenVisualization}
+        downloadSessionId={downloadSessionId}
       />
     ),
     img: (props) => {

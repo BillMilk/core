@@ -8,7 +8,7 @@ import { TerminalTabs } from "./TerminalTabs"
 import { EditorView, type EditorViewHandle } from "./EditorView"
 import { ReviewView } from "./ReviewView"
 import { HistoryView } from "./HistoryView"
-import { PreviewPanel, type PreviewOpenRequest } from "./PreviewPanel"
+import { PreviewPanel, type PreviewOpenRequest, type PreviewSource } from "./PreviewPanel"
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher"
 import { buildWorkspaceViews } from "./team-workspace-view"
 import { useProject } from "@/hooks/use-projects"
@@ -21,7 +21,7 @@ type WorkspaceTabWithTeam = WorkspaceTab | "team-status"
 export interface WorkspacePanelHandle {
   setTab: (tab: WorkspaceTab) => void
   openFile: (path: string, line?: number, column?: number) => void
-  openPreview: (url: string, workspaceId?: string) => void
+  openPreview: (source: PreviewSource, workspaceId?: string) => void
 }
 
 export type WorkspacePreviewRequest = PreviewOpenRequest
@@ -215,11 +215,11 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = React.memo(
         selectTab('editor')
         requestAnimationFrame(() => editorRef.current?.openFile(path, line, column))
       },
-      openPreview: (url: string, requestWorkspaceId?: string) => {
+      openPreview: (source: PreviewSource, requestWorkspaceId?: string) => {
         previewRequestIdRef.current += 1
         setImperativePreviewRequest({
           id: previewRequestIdRef.current,
-          url,
+          source,
           workspaceId: requestWorkspaceId,
         })
         selectTab('preview')

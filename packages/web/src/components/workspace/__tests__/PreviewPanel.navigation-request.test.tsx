@@ -74,7 +74,10 @@ describe('PreviewPanel navigation requests', () => {
       root.render(
         <PreviewPanel
           workspaceId="workspace-1"
-          navigationRequest={{ id: 1, url: 'http://localhost:4173/dashboard?from=agent' }}
+          navigationRequest={{
+            id: 1,
+            source: { kind: 'web', url: 'http://localhost:4173/dashboard?from=agent' },
+          }}
         />,
       )
     })
@@ -83,5 +86,40 @@ describe('PreviewPanel navigation requests', () => {
     })
 
     expect(updateConfigMock).toHaveBeenCalledWith('http://localhost:4173')
+  })
+
+  it('opens a session visualization without changing the workspace target', async () => {
+    await act(async () => {
+      root.render(
+        <PreviewPanel
+          workspaceId="workspace-1"
+          navigationRequest={{
+            id: 2,
+            source: {
+              kind: 'visualization',
+              sessionId: 'session-1',
+              file: 'agent-tower-architecture.html',
+            },
+          }}
+        />,
+      )
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(updateConfigMock).not.toHaveBeenCalled()
+    const frame = container.querySelector('iframe')
+    expect(frame?.getAttribute('src')).toContain('/sessions/session-1/visualizations/agent-tower-architecture.html')
+    expect(frame?.getAttribute('sandbox')).not.toContain('allow-same-origin')
+
+    await act(async () => {
+      root.render(<PreviewPanel workspaceId="workspace-1" />)
+    })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Back"]')?.click()
+    })
+
+    expect(container.querySelector('iframe')).toBeNull()
   })
 })
