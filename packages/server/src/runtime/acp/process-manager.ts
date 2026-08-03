@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { Readable, Transform, Writable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import { AgentRuntimeError } from '../errors.js';
+import type { AcpStdoutFrameTransform } from './agents/types.js';
 
 const MAX_STDOUT_LINE_BYTES = 1024 * 1024;
 const MAX_STDERR_BYTES = 8 * 1024;
@@ -33,6 +34,8 @@ export class AcpProcessManager {
     args: string[];
     cwd: string;
     env: NodeJS.ProcessEnv;
+    maxStdoutFrameBytes?: number;
+    transformStdoutFrame?: AcpStdoutFrameTransform;
   }) {}
 
   async start(): Promise<AcpProcessStreams> {
@@ -81,7 +84,10 @@ export class AcpProcessManager {
       await this.stop();
       throw new AgentRuntimeError('spawn_failed', 'spawn', 'ACP adapter did not report a process id', true);
     }
-    const validatedOutput = createValidatedOutput(child.stdout);
+    const validatedOutput = createValidatedOutput(child.stdout, {
+      maxInputFrameBytes: this.launch.maxStdoutFrameBytes ?? MAX_STDOUT_LINE_BYTES,
+      transformFrame: this.launch.transformStdoutFrame,
+    });
     return {
       pid: child.pid,
       input: Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
@@ -141,20 +147,28 @@ export class AcpProcessManager {
   }
 }
 
-function createValidatedOutput(input: Readable): Readable {
+function createValidatedOutput(
+  input: Readable,
+  options: {
+    maxInputFrameBytes: number;
+    transformFrame?: AcpStdoutFrameTransform;
+  },
+): Readable {
   const decoder = new StringDecoder('utf8');
   let pending = '';
   const validator = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
       try {
         pending += decoder.write(chunk);
-        if (Buffer.byteLength(pending, 'utf8') > MAX_STDOUT_LINE_BYTES) {
-          throw new AgentRuntimeError('protocol_violation', 'protocol', 'ACP stdout line exceeded the size limit', false);
+        let newlineIndex = pending.indexOf('\n');
+        while (newlineIndex !== -1) {
+          const line = pending.slice(0, newlineIndex);
+          pending = pending.slice(newlineIndex + 1);
+          const frame = processFrame(line, options);
+          if (frame) this.push(`${frame}\n`);
+          newlineIndex = pending.indexOf('\n');
         }
-        const lines = pending.split('\n');
-        pending = lines.pop() ?? '';
-        for (const line of lines) validateFrame(line);
-        this.push(chunk);
+        assertFrameSize(pending, options.maxInputFrameBytes);
         callback();
       } catch (error) {
         callback(error as Error);
@@ -163,7 +177,8 @@ function createValidatedOutput(input: Readable): Readable {
     flush(callback) {
       try {
         pending += decoder.end();
-        validateFrame(pending);
+        const frame = processFrame(pending, options);
+        if (frame) this.push(frame);
         callback();
       } catch (error) {
         callback(error as Error);
@@ -174,9 +189,16 @@ function createValidatedOutput(input: Readable): Readable {
   return validator;
 }
 
-function validateFrame(line: string): void {
+function processFrame(
+  line: string,
+  options: {
+    maxInputFrameBytes: number;
+    transformFrame?: AcpStdoutFrameTransform;
+  },
+): string | undefined {
   const trimmed = line.trim();
-  if (!trimmed) return;
+  if (!trimmed) return undefined;
+  assertFrameSize(trimmed, options.maxInputFrameBytes);
   let value: unknown;
   try {
     value = JSON.parse(trimmed);
@@ -185,6 +207,18 @@ function validateFrame(line: string): void {
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new AgentRuntimeError('protocol_violation', 'protocol', 'ACP stdout contained a non-object JSON value', false);
+  }
+  const normalized = options.transformFrame
+    ? options.transformFrame(value as Record<string, unknown>)
+    : value as Record<string, unknown>;
+  const serialized = JSON.stringify(normalized);
+  assertFrameSize(serialized, MAX_STDOUT_LINE_BYTES);
+  return serialized;
+}
+
+function assertFrameSize(value: string, maxBytes: number): void {
+  if (Buffer.byteLength(value, 'utf8') > maxBytes) {
+    throw new AgentRuntimeError('protocol_violation', 'protocol', 'ACP stdout line exceeded the size limit', false);
   }
 }
 

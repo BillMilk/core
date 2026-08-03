@@ -176,6 +176,67 @@ describe('AcpProjector', () => {
     expect(entry.metadata).not.toHaveProperty('toolOutputSummary');
   });
 
+  it('keeps a bounded preview while accumulating terminal output deltas', () => {
+    const { msgStore, projector } = setup();
+    projector.project(notification({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tool-stream',
+      title: 'Run command',
+      kind: 'execute',
+      status: 'in_progress',
+    }));
+    for (const data of ['a'.repeat(20_000), 'b'.repeat(20_000), 'z'.repeat(20_000)]) {
+      projector.project(notification({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tool-stream',
+        _meta: { terminal_output_delta: { data, terminal_id: 'tool-stream' } },
+      }));
+    }
+    projector.project(notification({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tool-stream',
+      status: 'completed',
+    }));
+
+    const [entry] = msgStore.getSnapshot().entries;
+    const preview = entry.metadata?.toolOutputSummary as string;
+    expect(entry.metadata?.status).toBe('success');
+    expect(preview.length).toBeLessThanOrEqual(32 * 1024);
+    expect(preview).toContain('[TRUNCATED]');
+    expect(preview.startsWith('a')).toBe(true);
+    expect(preview.endsWith('z')).toBe(true);
+  });
+
+  it('does not duplicate terminal output repeated in the same aggregate update', () => {
+    const { msgStore, projector } = setup();
+    projector.project(notification({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tool-aggregate',
+      status: 'completed',
+      rawOutput: { formatted_output: 'command output', exit_code: 0 },
+      _meta: { terminal_output_delta: { data: 'command output', terminal_id: 'tool-aggregate' } },
+    }));
+
+    expect(msgStore.getSnapshot().entries[0].metadata?.toolOutputSummary).toBe('command output');
+  });
+
+  it('replaces an earlier terminal preview with a newer structured raw output', () => {
+    const { msgStore, projector } = setup();
+    projector.project(notification({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tool-replaced-output',
+      _meta: { terminal_output_delta: { data: 'old output', terminal_id: 'tool-replaced-output' } },
+    }));
+    projector.project(notification({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tool-replaced-output',
+      status: 'completed',
+      rawOutput: { result: 'new output' },
+    }));
+
+    expect(msgStore.getSnapshot().entries[0].metadata?.toolOutputSummary).toBe('{"result":"new output"}');
+  });
+
   it('projects MCP startup pseudo-tools as non-blocking warnings instead of user tools', () => {
     const { msgStore, projector } = setup();
 

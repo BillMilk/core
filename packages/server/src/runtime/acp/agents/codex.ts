@@ -5,6 +5,10 @@ import { AgentType } from '@agent-tower/shared';
 import { which } from '../../../utils/index.js';
 import { AgentRuntimeError } from '../../errors.js';
 import { projectCodexAcpProvider } from '../codex-provider-config.js';
+import {
+  codexAcpMaxStdoutFrameBytes,
+  normalizeCodexAcpStdoutFrame,
+} from './codex-frame-normalizer.js';
 import { isExecutableFile, resolveBundledCodexEntrypoint } from './executable-resolution.js';
 import type { AcpAgentDefinition } from './types.js';
 
@@ -13,6 +17,8 @@ const require = createRequire(import.meta.url);
 export const codexAcpAgentDefinition: AcpAgentDefinition = {
   agentType: AgentType.CODEX,
   displayName: 'Codex',
+  maxStdoutFrameBytes: codexAcpMaxStdoutFrameBytes,
+  transformStdoutFrame: normalizeCodexAcpStdoutFrame,
 
   projectProvider(provider, inheritedEnvironment) {
     return {

@@ -21,6 +21,9 @@ import type { RuntimeDriverEventSink } from '../contracts.js';
 import { randomUUID } from 'node:crypto';
 
 const MAX_TEXT_LENGTH = 64 * 1024;
+const MAX_TOOL_OUTPUT_LENGTH = 32 * 1024;
+const TOOL_OUTPUT_HEAD_LENGTH = 24 * 1024;
+const TOOL_OUTPUT_TRUNCATED_MARKER = '\n[TRUNCATED]\n';
 
 interface StreamingEntry {
   index: number;
@@ -38,6 +41,13 @@ interface ProjectedTool {
   locations?: ToolLocation[];
   inputSummary?: string;
   outputSummary?: string;
+  terminalOutput?: BoundedTextPreview;
+}
+
+interface BoundedTextPreview {
+  head: string;
+  tail: string;
+  truncated: boolean;
 }
 
 export class AcpProjector {
@@ -148,6 +158,7 @@ export class AcpProjector {
     const title = tool.title || tool.kind || 'Tool call';
     const kind = tool.kind || 'other';
     const content = summarizeTool(tool, title);
+    const outputSummary = resolveToolOutputSummary(tool);
     const base = createToolUse(title, content, toolAction(kind), toolId, opaqueId('tool', toolId));
     const entry: NormalizedEntry = {
       ...base,
@@ -159,7 +170,7 @@ export class AcpProjector {
         ...(tool.content ? { toolContent: tool.content } : {}),
         ...(tool.locations ? { toolLocations: tool.locations } : {}),
         ...(tool.inputSummary !== undefined ? { toolInputSummary: tool.inputSummary } : {}),
-        ...(tool.outputSummary !== undefined ? { toolOutputSummary: tool.outputSummary } : {}),
+        ...(outputSummary !== undefined ? { toolOutputSummary: outputSummary } : {}),
       },
     };
     this.tools.set(toolId, tool);
@@ -224,6 +235,7 @@ export class AcpProjector {
 }
 
 function mergeToolUpdate(tool: ProjectedTool, update: Record<string, unknown>): void {
+  let replacedTerminalOutput = false;
   if (hasOwn(update, 'title')) {
     tool.title = typeof update.title === 'string' ? sanitizeText(update.title, 4_096) : undefined;
   }
@@ -247,14 +259,32 @@ function mergeToolUpdate(tool: ProjectedTool, update: Record<string, unknown>): 
     tool.inputSummary = update.rawInput === null ? undefined : safeSummary(update.rawInput);
   }
   if (hasOwn(update, 'rawOutput') && update.rawOutput !== undefined) {
-    tool.outputSummary = update.rawOutput === null ? undefined : safeSummary(update.rawOutput);
+    if (update.rawOutput === null) {
+      tool.outputSummary = undefined;
+      tool.terminalOutput = undefined;
+    } else {
+      const formattedOutput = asRecord(update.rawOutput)?.formatted_output;
+      if (typeof formattedOutput === 'string') {
+        tool.outputSummary = undefined;
+        tool.terminalOutput = appendBoundedPreview(undefined, formattedOutput);
+        replacedTerminalOutput = true;
+      } else {
+        tool.terminalOutput = undefined;
+        tool.outputSummary = safeSummary(update.rawOutput);
+      }
+    }
+  }
+  const terminalDelta = readTerminalOutput(update);
+  if (terminalDelta !== undefined && !replacedTerminalOutput) {
+    tool.terminalOutput = appendBoundedPreview(tool.terminalOutput, terminalDelta);
   }
 }
 
 function summarizeTool(tool: ProjectedTool, fallback: string): string {
   const parts: string[] = [];
   if (tool.inputSummary) parts.push(`Input\n${tool.inputSummary}`);
-  if (tool.outputSummary) parts.push(`Output\n${tool.outputSummary}`);
+  const outputSummary = resolveToolOutputSummary(tool);
+  if (outputSummary) parts.push(`Output\n${outputSummary}`);
   const content = tool.content?.map(summarizeToolContent).filter(Boolean).join('\n');
   if (content) parts.push(`Content\n${content}`);
   const locations = tool.locations?.map((location) => (
@@ -278,10 +308,55 @@ function summarizeMcpStartupDiagnostic(tool: ProjectedTool): string {
 
 function safeSummary(value: unknown): string {
   try {
-    return sanitizeText(typeof value === 'string' ? value : JSON.stringify(value), 32 * 1024);
+    return sanitizeText(typeof value === 'string' ? value : JSON.stringify(value), MAX_TOOL_OUTPUT_LENGTH);
   } catch {
     return '[Unsupported tool data]';
   }
+}
+
+function resolveToolOutputSummary(tool: ProjectedTool): string | undefined {
+  if (!tool.terminalOutput) return tool.outputSummary;
+  return tool.terminalOutput.truncated
+    ? `${tool.terminalOutput.head}${TOOL_OUTPUT_TRUNCATED_MARKER}${tool.terminalOutput.tail}`
+    : tool.terminalOutput.head;
+}
+
+function readTerminalOutput(update: Record<string, unknown>): string | undefined {
+  const meta = asRecord(update._meta);
+  for (const key of ['terminal_output_delta', 'terminal_output']) {
+    const output = asRecord(meta?.[key]);
+    if (typeof output?.data === 'string') return output.data;
+  }
+  return undefined;
+}
+
+function appendBoundedPreview(
+  preview: BoundedTextPreview | undefined,
+  next: string,
+): BoundedTextPreview {
+  const sanitized = sanitizeText(next, Number.MAX_SAFE_INTEGER);
+  if (!preview) {
+    if (sanitized.length <= MAX_TOOL_OUTPUT_LENGTH) {
+      return { head: sanitized, tail: '', truncated: false };
+    }
+    return {
+      head: sanitized.slice(0, TOOL_OUTPUT_HEAD_LENGTH),
+      tail: sanitized.slice(-(MAX_TOOL_OUTPUT_LENGTH - TOOL_OUTPUT_HEAD_LENGTH - TOOL_OUTPUT_TRUNCATED_MARKER.length)),
+      truncated: true,
+    };
+  }
+  if (!preview.truncated && preview.head.length + sanitized.length <= MAX_TOOL_OUTPUT_LENGTH) {
+    return { ...preview, head: `${preview.head}${sanitized}` };
+  }
+  const tailLength = MAX_TOOL_OUTPUT_LENGTH - TOOL_OUTPUT_HEAD_LENGTH - TOOL_OUTPUT_TRUNCATED_MARKER.length;
+  const combined = preview.truncated
+    ? `${preview.tail}${sanitized}`
+    : `${preview.head}${sanitized}`;
+  return {
+    head: preview.truncated ? preview.head : combined.slice(0, TOOL_OUTPUT_HEAD_LENGTH),
+    tail: combined.slice(-tailLength),
+    truncated: true,
+  };
 }
 
 function mapToolContent(value: unknown): ToolContent {

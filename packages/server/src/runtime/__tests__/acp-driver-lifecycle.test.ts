@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExecutionEnv } from '../../executors/execution-env.js';
 import { MsgStore, type NormalizedEntry } from '../../output/index.js';
 import type { RuntimeDriverEventSink } from '../contracts.js';
+import { AgentRuntimeError } from '../errors.js';
 import { WorkspaceBackgroundProcessManager } from '../../services/workspace-background-process-manager.js';
 
 function deferred<T>() {
@@ -27,6 +28,8 @@ const acpState = vi.hoisted(() => ({
   request: undefined as unknown as ReturnType<typeof vi.fn>,
   notify: undefined as unknown as ReturnType<typeof vi.fn>,
   close: undefined as unknown as ReturnType<typeof vi.fn>,
+  processStarts: 0,
+  processStops: 0,
 }));
 
 vi.mock('@agentclientprotocol/sdk', () => {
@@ -100,10 +103,13 @@ vi.mock('@agentclientprotocol/sdk', () => {
 vi.mock('../acp/process-manager.js', () => ({
   AcpProcessManager: class {
     async start() {
+      acpState.processStarts += 1;
       return { pid: 123, input: {}, output: {} };
     }
     onExit() {}
-    async stop() {}
+    async stop() {
+      acpState.processStops += 1;
+    }
   },
 }));
 
@@ -132,6 +138,8 @@ beforeEach(() => {
   acpState.supportsResume = true;
   acpState.notificationHandler = undefined;
   acpState.prompt = deferred<{ stopReason?: string }>();
+  acpState.processStarts = 0;
+  acpState.processStops = 0;
 });
 
 describe('AcpRuntimeDriver lifecycle', () => {
@@ -287,5 +295,43 @@ describe('AcpRuntimeDriver lifecycle', () => {
     expect(methods.filter((method) => method === 'session/load')).toHaveLength(1);
     expect(methods.filter((method) => method === 'session/prompt')).toHaveLength(2);
     await session.close();
+  });
+
+  it('restarts a poisoned ACP transport and loads the external session on follow-up', async () => {
+    const { sink, input } = setup();
+    const session = await new AcpRuntimeDriver().open(input, sink);
+    const first = await session.runTurn({
+      turnId: 'turn-failed',
+      prompt: 'produce a large tool result',
+      msgStore: new MsgStore(),
+      resumeExternalSessionId: 'external-1',
+    }, sink);
+
+    acpState.prompt?.reject(new AgentRuntimeError(
+      'protocol_violation',
+      'protocol',
+      'ACP stdout line exceeded the size limit',
+      false,
+    ));
+    await expect(first.completion).rejects.toMatchObject({ code: 'protocol_violation' });
+    expect(acpState.processStarts).toBe(1);
+    expect(acpState.processStops).toBe(1);
+
+    acpState.prompt = deferred<{ stopReason?: string }>();
+    const second = await session.runTurn({
+      turnId: 'turn-reconnected',
+      prompt: 'continue',
+      msgStore: new MsgStore(),
+      resumeExternalSessionId: 'external-1',
+    }, sink);
+    acpState.prompt.resolve({ stopReason: 'end_turn' });
+    await expect(second.completion).resolves.toEqual({ stopReason: 'end_turn' });
+
+    const methods = vi.mocked(acpState.request).mock.calls.map(([method]) => method);
+    expect(acpState.processStarts).toBe(2);
+    expect(methods.filter((method) => method === 'initialize')).toHaveLength(2);
+    expect(methods.filter((method) => method === 'session/load')).toHaveLength(2);
+    await session.close();
+    expect(acpState.processStops).toBe(2);
   });
 });

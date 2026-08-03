@@ -23,10 +23,13 @@ SessionManager -> RuntimeCoordinator -> CLI Driver -> Executor / PTY / AgentPipe
 - Parser/ACP Projector 将输出转为 `NormalizedEntry` JSON Patch；MsgStore 生成统一 snapshot。
 - ACP `tool_call_update` 是按 `toolCallId` 发送的局部更新；Projector 必须累计并合并工具状态，省略字段沿用旧值、显式 `null` 清除字段。保留 title/kind/status/content/locations/input/output 的结构化语义，不能用单次 update 重建并覆盖完整工具条目；ACP `pending` 也不等同于独立的 permission request。
 - ACP adapter 可能用伪 `tool_call` 转发运行时诊断（例如 `mcp_startup.*`）；这类事件不计入用户工具调用，非阻塞失败应投影为警告日志并保留诊断内容，真正导致 turn/session 失败的错误仍使用错误日志。
+- ACP stdout 的通用归一化后单帧上限保持 `1 MiB`。已知 adapter 若会把合法的大型工具输出重复塞入单帧，只能由对应 Agent Definition 声明更大的原始帧硬上限和结构化 frame transform，在进入通用 ACP SDK 前移除重复数据并生成有界预览；不得全局放宽、取消上限或 patch 第三方 adapter。terminal output delta 由 Projector 增量合并为固定大小的首尾预览，完成事件不得让 snapshot 再持有完整聚合输出。
 
 DriverSession 可以跨 turn 保留协议连接和 external session id，但 MsgStore 是 turn-bound 资源，必须由 `runTurn` 注入。idle DriverSession 不得捕获 MsgStore，否则 SessionManager 释放 snapshot store 后，延迟 follow-up 会把输出写入失效对象并造成大对象常驻。
 
 托管 Agent 的 workspace-service opaque credential 与 DriverSession/MCP transport 同生命周期：逻辑 turn 自然完成不撤销，CLI/ACP follow-up 继续使用原 credential；DriverSession dispose、显式 Session stop/delete、启动失败和 app destroy 必须撤销。显式 stop 因此会关闭 ACP DriverSession，后续 follow-up 通过持久化 external session id 重开连接并获得新 credential；sendMessage 为替换 active turn 做的健康 cancel 仍可复用连接。
+
+ACP 协议违规、连接关闭或 adapter 进程退出会使当前 transport 不可复用，必须停止对应进程、执行 launch cleanup 并清空 session-ready 状态。DriverSession 本身可继续持有 external session id 与同生命周期 credential；下一次 turn 为新 child 分配独立 `runtimeInstanceId`，重新 initialize 并通过 `session/load` 恢复。旧 transport 的迟到 close/exit 不得清理新 transport。
 
 ACP 在 sendMessage 替换 active turn 时先用 `session/cancel` 等待 prompt 收敛，健康 DriverSession 可供该 follow-up 复用；只有取消失败或超时才销毁连接。用户显式停止整个 Tower Session 时关闭 DriverSession，以便同步撤销其 credential。用户主动取消造成的 prompt rejection 不得投影为连接错误。同一 Tower Session 真正重连使用 `session/load`；agent 回放的历史必须先投影到临时 MsgStore，再与本地 snapshot 按稳定 ACP entry ID 做线性合并，本地 user message 保持权威，并以单个 `/entries` replacement patch 提交，不能逐条追加回放事件。跨 Tower Session 只续接原生上下文时优先使用 Agent 声明支持的 `session/resume`；不支持时回退 `session/load`，但 load 阶段的旧历史不得导入新的 Tower Session。
 

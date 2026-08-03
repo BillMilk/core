@@ -26,12 +26,18 @@ export interface AcpLaunchSpec {
   cleanup?: () => Promise<void>;
 }
 
+export type AcpStdoutFrameTransform = (
+  frame: Record<string, unknown>,
+) => Record<string, unknown>;
+
 export type AcpSessionBootstrapResponse = Pick<acp.NewSessionResponse, 'modes' | 'configOptions'>;
 
 export interface AcpAgentDefinition {
   readonly agentType: AgentType;
   readonly displayName: string;
   readonly initializeTimeoutMs?: number;
+  readonly maxStdoutFrameBytes?: number;
+  readonly transformStdoutFrame?: AcpStdoutFrameTransform;
   projectProvider(provider: Provider | null, inheritedEnvironment: Record<string, string>): AcpAgentProfile;
   resolveLaunch(input: RuntimeOpenInput, profile: AcpAgentProfile): Promise<AcpLaunchSpec>;
   checkAvailability(provider: Provider): Promise<AvailabilityInfo>;

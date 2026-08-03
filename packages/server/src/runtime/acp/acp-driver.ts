@@ -54,6 +54,7 @@ class AcpDriverSession implements DriverSession {
   private closed = false;
   private launchCleanup?: () => Promise<void>;
   private cleanupPromise?: Promise<void>;
+  private transportResetPromise?: Promise<void>;
   private negotiatedCapabilities: RuntimeCapabilities = {
     loadSession: false,
     terminalInput: false,
@@ -63,7 +64,7 @@ class AcpDriverSession implements DriverSession {
   private supportsSessionResume = false;
   private readonly pendingPermissions = new Map<string, PendingPermission>();
   private readonly cancelledTurnIds = new Set<string>();
-  readonly runtimeInstanceId = randomUUID();
+  private currentRuntimeInstanceId = randomUUID();
 
   private constructor(
     private readonly input: RuntimeOpenInput,
@@ -110,14 +111,19 @@ class AcpDriverSession implements DriverSession {
     return this.negotiatedCapabilities;
   }
 
+  get runtimeInstanceId(): string {
+    return this.currentRuntimeInstanceId;
+  }
+
   get externalSessionId(): string | undefined {
     return this.currentExternalSessionId;
   }
 
   async runTurn(turn: RuntimeRunTurnInput, sink: RuntimeDriverEventSink): Promise<DriverTurn> {
-    if (this.closed || !this.connection) {
+    if (this.closed) {
       throw new AgentRuntimeError('connection_closed', 'prompt', 'ACP connection is closed', true);
     }
+    if (!this.connection) await this.connect(sink);
     if (this.currentTurnId) {
       throw new AgentRuntimeError('turn_already_running', 'prompt', 'ACP turn is already running', false);
     }
@@ -133,7 +139,12 @@ class AcpDriverSession implements DriverSession {
       throw error;
     }
 
-    const request = this.connection.agent.request(acp.methods.agent.session.prompt, {
+    const connection = this.connection;
+    if (!connection) {
+      this.clearTurn(turn.turnId);
+      throw new AgentRuntimeError('connection_closed', 'prompt', 'ACP connection is closed', true);
+    }
+    const request = connection.agent.request(acp.methods.agent.session.prompt, {
       sessionId: this.requireExternalSessionId(),
       prompt: [{
         type: 'text',
@@ -144,11 +155,14 @@ class AcpDriverSession implements DriverSession {
     });
     const completion = request.then(
       (response) => ({ stopReason: response.stopReason }),
-      (error) => {
+      async (error) => {
         if (this.cancelledTurnIds.has(turn.turnId)) {
           return { stopReason: 'cancelled' };
         }
         const normalized = normalizeAcpError(error, 'prompt');
+        if (shouldResetAcpTransport(normalized)) {
+          await this.resetTransport(connection).catch(() => undefined);
+        }
         projector.projectError(normalized);
         throw normalized;
       },
@@ -188,48 +202,53 @@ class AcpDriverSession implements DriverSession {
     if (this.closed) return;
     this.closed = true;
     this.invalidatePermissions(this.currentSink);
-    this.connection?.close();
-    this.connection = undefined;
-    const manager = this.processManager;
-    this.processManager = undefined;
-    try {
-      await manager?.stop();
-    } finally {
-      await this.cleanupLaunch();
-    }
+    await this.resetTransport();
   }
 
   private projector?: AcpProjector;
 
   private async connect(sink: RuntimeDriverEventSink): Promise<void> {
+    if (this.transportResetPromise) await this.transportResetPromise;
+    if (this.closed) {
+      throw new AgentRuntimeError('connection_closed', 'initialize', 'ACP connection is closed', true);
+    }
+    if (this.connection) return;
+    this.cleanupPromise = undefined;
     const launch = await this.definition.resolveLaunch(this.input, this.providerProfile);
     this.launchCleanup = launch.cleanup;
+    const runtimeInstanceId = randomUUID();
+    this.currentRuntimeInstanceId = runtimeInstanceId;
     const manager = new AcpProcessManager({
       command: launch.command,
       args: launch.args,
       cwd: launch.cwd,
       env: launch.env,
+      maxStdoutFrameBytes: this.definition.maxStdoutFrameBytes,
+      transformStdoutFrame: this.definition.transformStdoutFrame,
     });
     this.processManager = manager;
     try {
       const streams = await manager.start();
-      await sink.process({ type: 'started', runtimeInstanceId: this.runtimeInstanceId, pid: streams.pid });
+      await sink.process({ type: 'started', runtimeInstanceId, pid: streams.pid });
       manager.onExit((exit) => {
         void sink.process({
           type: 'exited',
-          runtimeInstanceId: this.runtimeInstanceId,
+          runtimeInstanceId,
           exitCode: exit.exitCode,
           signal: exit.signal,
         });
-        if (!this.closed) this.connection?.close(
-          new AgentRuntimeError(
-            'process_exit',
-            'runtime',
-            exit.stderrExcerpt || `ACP adapter exited with code ${exit.exitCode ?? 'unknown'}`,
-            true,
-          ),
-        );
-        void this.cleanupLaunch().catch(() => undefined);
+        if (!this.closed && this.processManager === manager) {
+          const connection = this.connection;
+          connection?.close(
+            new AgentRuntimeError(
+              'process_exit',
+              'runtime',
+              exit.stderrExcerpt || `ACP adapter exited with code ${exit.exitCode ?? 'unknown'}`,
+              true,
+            ),
+          );
+          void this.resetTransport(connection).catch(() => undefined);
+        }
       });
       const app = acp.client({ name: 'agent-tower' })
         .onNotification(acp.methods.client.session.update, async ({ params }) => {
@@ -268,16 +287,45 @@ class AcpDriverSession implements DriverSession {
         permissions: true,
       };
       this.supportsSessionResume = response.agentCapabilities?.sessionCapabilities?.resume != null;
-      void connection.closed.then(() => {
-        if (!this.closed && this.currentTurnId) {
-          this.invalidatePermissions(this.currentSink);
-        }
-      });
+      void connection.closed.then(
+        () => this.handleUnexpectedConnectionClose(connection),
+        () => this.handleUnexpectedConnectionClose(connection),
+      );
     } catch (error) {
-      await manager.stop().catch(() => undefined);
-      this.processManager = undefined;
-      await this.cleanupLaunch().catch(() => undefined);
+      await this.resetTransport(this.connection).catch(() => undefined);
       throw normalizeAcpError(error, 'initialize');
+    }
+  }
+
+  private handleUnexpectedConnectionClose(connection: acp.ClientConnection): void {
+    if (this.closed || this.connection !== connection) return;
+    this.invalidatePermissions(this.currentSink);
+    void this.resetTransport(connection).catch(() => undefined);
+  }
+
+  private async resetTransport(expectedConnection?: acp.ClientConnection): Promise<void> {
+    if (this.transportResetPromise) return this.transportResetPromise;
+    if (expectedConnection && this.connection !== expectedConnection) return;
+
+    const connection = this.connection;
+    const manager = this.processManager;
+    this.connection = undefined;
+    this.processManager = undefined;
+    this.sessionReady = false;
+    connection?.close();
+
+    const reset = (async () => {
+      try {
+        await manager?.stop();
+      } finally {
+        await this.cleanupLaunch();
+      }
+    })();
+    this.transportResetPromise = reset;
+    try {
+      await reset;
+    } finally {
+      if (this.transportResetPromise === reset) this.transportResetPromise = undefined;
     }
   }
 
@@ -487,6 +535,12 @@ function normalizeAcpError(error: unknown, stage: string): AgentRuntimeError {
   return new AgentRuntimeError('acp_request_failed', stage, sanitize(message, 4_096), true, {
     cause: error,
   });
+}
+
+function shouldResetAcpTransport(error: AgentRuntimeError): boolean {
+  return error.code === 'protocol_violation'
+    || error.code === 'connection_closed'
+    || error.code === 'process_exit';
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
