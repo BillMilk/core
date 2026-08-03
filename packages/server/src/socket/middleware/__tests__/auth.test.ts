@@ -132,7 +132,7 @@ describe('socket authMiddleware', () => {
     const socket = makeSocket({
       headers: {
         [INTERNAL_API_TOKEN_HEADER]: 'wrong-internal-token',
-        cookie: 'agent-tower-access=valid-access-token',
+        cookie: 'agent-tower-access-0123456789abcdef=valid-access-token',
       },
     });
 
@@ -151,7 +151,7 @@ describe('socket authMiddleware', () => {
     accessAuthMock.validateSessionTokenWithGeneration.mockResolvedValueOnce({ valid: true, generation: 2 });
     const socket = makeSocket({
       headers: {
-        cookie: 'agent-tower-access=valid-access-token',
+        cookie: 'agent-tower-access-0123456789abcdef=valid-access-token',
       },
     });
 
@@ -169,7 +169,7 @@ describe('socket authMiddleware', () => {
     accessAuthMock.validateSessionTokenWithGeneration.mockResolvedValueOnce({ valid: false, generation: 1 });
     const socket = makeSocket({
       headers: {
-        cookie: 'agent-tower-access=old-token',
+        cookie: 'agent-tower-access-0123456789abcdef=old-token',
       },
     });
 

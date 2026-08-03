@@ -4,9 +4,11 @@ import https from 'node:https';
 import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { Tunnel } from 'cloudflared';
-import { AccessAuthService } from './access-auth.service.js';
+import {
+  AccessAuthService,
+  isAccessAuthCookieName,
+} from './access-auth.service.js';
 import type { NormalizedPreviewTarget } from './preview.service.js';
-import { ACCESS_AUTH_COOKIE_NAME } from './access-auth.service.js';
 import { TUNNEL_SESSION_COOKIE_NAME } from '../utils/tunnel-cookie.js';
 import { ensureCloudflaredBinary } from './cloudflared-runtime.js';
 
@@ -20,10 +22,6 @@ const DEFAULT_SWEEP_INTERVAL_MS = 30 * 1000;
 const TUNNEL_STARTUP_TIMEOUT_MS = 30 * 1000;
 const PREVIEW_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 const QUICK_TUNNEL_OPTIONS = { '--no-autoupdate': true } as const;
-const INTERNAL_COOKIE_NAMES = new Set([
-  ACCESS_AUTH_COOKIE_NAME,
-  TUNNEL_SESSION_COOKIE_NAME,
-]);
 
 type ProxyRequestOptions = http.RequestOptions & { rejectUnauthorized?: boolean };
 type PreviewMode = 'local' | 'remote';
@@ -233,11 +231,20 @@ function scopedTargetCookieName(runtimeCookieName: string, targetCookieName: str
   return `${runtimeCookieName}-target-${Buffer.from(targetCookieName).toString('base64url')}`;
 }
 
+function isInternalCookieName(name: string): boolean {
+  return name === TUNNEL_SESSION_COOKIE_NAME || isAccessAuthCookieName(name);
+}
+
 function unscopedTargetCookieName(runtimeCookieName: string, cookieName: string): string | null {
-  for (const internalName of INTERNAL_COOKIE_NAMES) {
-    if (cookieName === scopedTargetCookieName(runtimeCookieName, internalName)) return internalName;
+  const prefix = `${runtimeCookieName}-target-`;
+  if (!cookieName.startsWith(prefix)) return null;
+
+  try {
+    const targetCookieName = Buffer.from(cookieName.slice(prefix.length), 'base64url').toString('utf8');
+    return isInternalCookieName(targetCookieName) ? targetCookieName : null;
+  } catch {
+    return null;
   }
-  return null;
 }
 
 function filterCookieHeader(cookieHeader: string | undefined, runtimeCookieName: string): string | undefined {
@@ -256,7 +263,7 @@ function filterCookieHeader(cookieHeader: string | undefined, runtimeCookieName:
       cookies.push(`${targetName}${separator === -1 ? '' : part.slice(separator)}`);
       continue;
     }
-    if (INTERNAL_COOKIE_NAMES.has(name)) continue;
+    if (isInternalCookieName(name)) continue;
     cookies.push(part);
   }
   return cookies.length > 0 ? cookies.join('; ') : undefined;
@@ -335,7 +342,7 @@ export function rewriteTargetCookie(
   const separator = next.indexOf('=');
   if (separator > 0) {
     const cookieName = next.slice(0, separator).trim();
-    if (INTERNAL_COOKIE_NAMES.has(cookieName)) {
+    if (isInternalCookieName(cookieName)) {
       next = `${scopedTargetCookieName(runtimeCookieName, cookieName)}${next.slice(separator)}`;
     }
   }

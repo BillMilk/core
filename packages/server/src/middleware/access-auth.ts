@@ -163,8 +163,7 @@ export async function accessAuthHook(
     return;
   }
 
-  const cookieToken = request.cookies[AccessAuthService.cookieName]
-    ?? AccessAuthService.extractCookieFromHeader(request.headers.cookie);
+  const cookieToken = AccessAuthService.extractCookieFromHeader(request.headers.cookie);
 
   if (await AccessAuthService.validateBrowserSessionToken(cookieToken)) {
     request.agentTowerAuthKind = 'browser';

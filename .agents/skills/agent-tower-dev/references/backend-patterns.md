@@ -65,6 +65,7 @@ Service/Manager -> EventMap -> SocketGateway -> shared event/payload -> web sync
 HTTP 同时受 tunnel session 和可选 access password 保护；应用级内部进程/手动 MCP 使用 internal token，托管 Agent 使用 per-session/invocation credential，浏览器使用签名 HttpOnly cookie 与同源写请求检查，Socket namespace 有对应认证。
 
 - 公共 endpoint 白名单保持最小，Agent CLI 安装接口保持 local-only。
+- Access password Cookie 名称必须在请求时根据规范化的绝对 data directory 派生，不能在模块加载阶段缓存，也不能按端口区分；这样同一 hostname 上的正式、开发和桌面实例不会互相覆盖。读取时只兼容当前实例名与旧版 `agent-tower-access`，preview 的过滤与目标 Cookie 隔离必须识别整个合法名称族。
 - 使用 `writeErrorLog` 脱敏，不记录 token、cookie、prompt、provider secret 或 TeamRun identity。
 - Preview UI 通过 `/api/previews/:workspaceId/sessions` 获取独立根路径 gateway；本地会话使用 gateway 端口，远程会话按 workspace 复用独立 Quick Tunnel。客户端每 30 秒续租，释放或失联后进入 10 分钟空闲回收；target 改变和 server shutdown 立即清理。`/view/:workspaceId` 仅保留旧客户端兼容，不再作为新 UI 主链路。
 - Gateway bootstrap 必须使用 workspace preview token 换取独立 HttpOnly Cookie；AccessAuth secret 轮换时同步使 gateway secret 失效。目标仍只允许 loopback。外层 Agent Tower 的 access/tunnel/gateway Cookie 不得转发给目标；若目标本身也是 Agent Tower，其同名认证 Cookie 必须按 workspace 改名隔离，并在转发前恢复目标原名。远程跨站 iframe 的目标 Cookie 使用 `Secure; SameSite=None; Partitioned`，同时剥离传给目标的 Cloudflare 客户端标识头，避免目标误判为自身 tunnel 流量。代理保留目标根路径、HTTP/WebSocket 和流式响应，只做 frame header、同 target 绝对 redirect、Cookie domain/basePath 与可选 bridge 注入，不恢复通用 HTML/CSS/JS 路径重写。修改 gateway、redirect、WebSocket、header、cookie 或 idle lifecycle 时运行 integration tests。

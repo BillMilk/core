@@ -244,7 +244,12 @@ describe('trusted preview request headers', () => {
       host: 'tower.example.com',
       origin: 'https://tower.example.com',
       referer: 'https://tower.example.com/view/workspace-1/settings',
-      cookie: 'agent-tower-access=secret; __Host-agent-tower-tunnel=tunnel; preview-session=abc',
+      cookie: [
+        'agent-tower-access=legacy-secret',
+        'agent-tower-access-0123456789abcdef=scoped-secret',
+        '__Host-agent-tower-tunnel=tunnel',
+        'preview-session=abc',
+      ].join('; '),
     }, targetUrl, '/app/settings?tab=team');
 
     expect(headers.host).toBe('127.0.0.1:5173');

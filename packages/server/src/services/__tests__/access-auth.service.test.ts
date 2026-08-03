@@ -18,6 +18,9 @@ const schemaPath = path.join(serverRoot, 'prisma/schema.prisma');
 
 let prisma: PrismaClient;
 let AccessAuthService: typeof import('../access-auth.service.js').AccessAuthService;
+let getAccessAuthCookieName: typeof import('../access-auth.service.js').getAccessAuthCookieName;
+let isAccessAuthCookieName: typeof import('../access-auth.service.js').isAccessAuthCookieName;
+let LEGACY_ACCESS_AUTH_COOKIE_NAME: typeof import('../access-auth.service.js').LEGACY_ACCESS_AUTH_COOKIE_NAME;
 let SocketGateway: typeof import('../../socket/socket-gateway.js').SocketGateway;
 let getEventBus: typeof import('../../core/container.js').getEventBus;
 let ClientEvents: typeof import('../../socket/events.js').ClientEvents;
@@ -119,6 +122,9 @@ describe('AccessAuthService', () => {
     const containerModule = await import('../../core/container.js');
     const socketEventsModule = await import('../../socket/events.js');
     AccessAuthService = serviceModule.AccessAuthService;
+    getAccessAuthCookieName = serviceModule.getAccessAuthCookieName;
+    isAccessAuthCookieName = serviceModule.isAccessAuthCookieName;
+    LEGACY_ACCESS_AUTH_COOKIE_NAME = serviceModule.LEGACY_ACCESS_AUTH_COOKIE_NAME;
     SocketGateway = socketGatewayModule.SocketGateway;
     getEventBus = containerModule.getEventBus;
     ClientEvents = socketEventsModule.ClientEvents;
@@ -145,6 +151,34 @@ describe('AccessAuthService', () => {
     });
   });
 
+  it('derives a stable, isolated cookie name from the data directory', () => {
+    const instanceA = path.join(testDir, 'instance-a');
+    const equivalentInstanceA = path.join(testDir, 'nested', '..', 'instance-a');
+    const instanceB = path.join(testDir, 'instance-b');
+
+    expect(getAccessAuthCookieName(instanceA)).toBe(getAccessAuthCookieName(equivalentInstanceA));
+    expect(getAccessAuthCookieName(instanceA)).not.toBe(getAccessAuthCookieName(instanceB));
+    expect(getAccessAuthCookieName(instanceA)).toMatch(/^agent-tower-access-[a-f0-9]{16}$/);
+    expect(isAccessAuthCookieName(LEGACY_ACCESS_AUTH_COOKIE_NAME)).toBe(true);
+    expect(isAccessAuthCookieName(getAccessAuthCookieName(instanceA))).toBe(true);
+    expect(isAccessAuthCookieName('agent-tower-access-unrelated')).toBe(false);
+  });
+
+  it('prefers this instance cookie, falls back to legacy, and ignores other instances', () => {
+    const currentCookieName = AccessAuthService.cookieName;
+    const otherCookieName = getAccessAuthCookieName(path.join(testDir, 'other-instance'));
+
+    expect(AccessAuthService.extractCookieFromHeaderWithSource(
+      `${LEGACY_ACCESS_AUTH_COOKIE_NAME}=legacy-token; ${currentCookieName}=scoped-token`,
+    )).toEqual({ token: 'scoped-token', source: 'scoped' });
+    expect(AccessAuthService.extractCookieFromHeaderWithSource(
+      `${LEGACY_ACCESS_AUTH_COOKIE_NAME}=legacy-token`,
+    )).toEqual({ token: 'legacy-token', source: 'legacy' });
+    expect(AccessAuthService.extractCookieFromHeaderWithSource(
+      `${otherCookieName}=other-token`,
+    )).toEqual({ token: null, source: null });
+  });
+
   it('initializes default settings safely under concurrent status requests', async () => {
     const results = await Promise.all(
       Array.from({ length: 8 }, () => AccessAuthService.getPublicStatus(null)),
@@ -160,6 +194,26 @@ describe('AccessAuthService', () => {
 
     await AccessAuthService.getPublicStatus(null);
     expect(AccessAuthService.__test.getSettingsDatabaseLoadCount()).toBe(1);
+  });
+
+  it('refreshes cached settings and invalidates sessions changed by another process', async () => {
+    let currentTime = 1_000_000;
+    AccessAuthService.__test.setLoginRateLimitClock(() => currentTime);
+    await AccessAuthService.updateSettings({
+      enabled: true,
+      newPassword: 'shared-db-pass',
+    });
+    const login = await AccessAuthService.login('shared-db-pass');
+
+    await prisma.accessAuthSettings.update({
+      where: { id: 'singleton' },
+      data: { sessionSecret: 'externally-rotated-session-secret' },
+    });
+
+    await expect(AccessAuthService.validateSessionToken(login.sessionToken)).resolves.toBe(true);
+    currentTime += AccessAuthService.__test.SETTINGS_CACHE_TTL_MS;
+    await expect(AccessAuthService.validateSessionToken(login.sessionToken)).resolves.toBe(false);
+    expect(AccessAuthService.getSessionSecretGeneration()).toBe(2);
   });
 
   it('enables, logs in, and invalidates old sessions after password change', async () => {

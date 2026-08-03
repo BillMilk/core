@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z, ZodError } from 'zod';
 import { ServiceError } from '../errors.js';
 import { AccessAuthService } from '../services/access-auth.service.js';
@@ -39,18 +39,37 @@ function handleError(error: unknown, reply: FastifyReply) {
   };
 }
 
+function clearAccessAuthCookies(request: FastifyRequest, reply: FastifyReply) {
+  const options = AccessAuthService.getClearCookieOptions(request);
+  reply.clearCookie(AccessAuthService.cookieName, options);
+  reply.clearCookie(AccessAuthService.legacyCookieName, options);
+}
+
 export async function accessAuthRoutes(app: FastifyInstance) {
   app.get('/access-auth/status', async (request, reply) => {
-    const cookieToken = request.cookies[AccessAuthService.cookieName]
-      ?? AccessAuthService.extractCookieFromHeader(request.headers.cookie);
-    const status = await AccessAuthService.getPublicStatus(cookieToken);
-    if (!status.enabled && !await AccessAuthService.validateBrowserSessionToken(cookieToken)) {
+    const cookie = AccessAuthService.extractCookieFromHeaderWithSource(request.headers.cookie);
+    const status = await AccessAuthService.getPublicStatus(cookie.token);
+    const browserSessionValid = !status.enabled
+      && await AccessAuthService.validateBrowserSessionToken(cookie.token);
+
+    if (
+      cookie.source === 'legacy'
+      && cookie.token
+      && (status.enabled ? status.authenticated : browserSessionValid)
+    ) {
+      reply.setCookie(
+        AccessAuthService.cookieName,
+        cookie.token,
+        AccessAuthService.getCookieOptions(request),
+      );
+    } else if (!status.enabled && !browserSessionValid) {
       reply.setCookie(
         AccessAuthService.cookieName,
         await AccessAuthService.createBrowserSessionToken(),
         AccessAuthService.getCookieOptions(request),
       );
     }
+
     return status;
   });
 
@@ -72,17 +91,11 @@ export async function accessAuthRoutes(app: FastifyInstance) {
   });
 
   app.post('/access-auth/logout', async (request, reply) => {
-    reply.clearCookie(
-      AccessAuthService.cookieName,
-      AccessAuthService.getClearCookieOptions(request),
-    );
-
-    const cookieToken = request.cookies[AccessAuthService.cookieName]
-      ?? AccessAuthService.extractCookieFromHeader(request.headers.cookie);
-    const status = await AccessAuthService.getPublicStatus(cookieToken);
+    clearAccessAuthCookies(request, reply);
+    const enabled = await AccessAuthService.isEnabled();
     return {
-      enabled: status.enabled,
-      authenticated: !status.enabled,
+      enabled,
+      authenticated: !enabled,
     };
   });
 
@@ -99,10 +112,7 @@ export async function accessAuthRoutes(app: FastifyInstance) {
       const data = updateSettingsSchema.parse(request.body);
       const result = await AccessAuthService.updateSettings(data);
       if (result.clearSession) {
-        reply.clearCookie(
-          AccessAuthService.cookieName,
-          AccessAuthService.getClearCookieOptions(request),
-        );
+        clearAccessAuthCookies(request, reply);
       } else if (result.sessionToken) {
         reply.setCookie(
           AccessAuthService.cookieName,

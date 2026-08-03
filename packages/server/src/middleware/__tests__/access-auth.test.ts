@@ -124,7 +124,7 @@ describe('accessAuthHook', () => {
     try {
       const status = await app.inject({ method: 'GET', url: '/api/access-auth/status' });
       const cookie = String(status.headers['set-cookie']);
-      expect(cookie).toContain('agent-tower-access=');
+      expect(cookie).toContain(`${AccessAuthService.cookieName}=`);
 
       const response = await app.inject({
         method: 'GET',
@@ -242,7 +242,7 @@ describe('accessAuthHook', () => {
       });
       expect(loginResponse.statusCode).toBe(200);
       const cookie = String(loginResponse.headers['set-cookie']);
-      expect(cookie).toContain('agent-tower-access=');
+      expect(cookie).toContain(`${AccessAuthService.cookieName}=`);
 
       const writeResponse = await app.inject({
         method: 'POST',
@@ -266,6 +266,107 @@ describe('accessAuthHook', () => {
       });
       expect(csrfResponse.statusCode).toBe(403);
     } finally {
+      await app.close();
+    }
+  });
+
+  it('migrates a valid legacy cookie to the scoped instance cookie', async () => {
+    await AccessAuthService.updateSettings({ enabled: true, newPassword: 'secret-pass' });
+    const login = await AccessAuthService.login('secret-pass');
+    const app = await buildTestApp();
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/access-auth/status',
+        headers: {
+          cookie: `agent-tower-access=${encodeURIComponent(login.sessionToken ?? '')}`,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ enabled: true, authenticated: true });
+      expect(String(response.headers['set-cookie']))
+        .toContain(`${AccessAuthService.cookieName}=`);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('migrates a valid legacy browser session when access password is disabled', async () => {
+    const browserSessionToken = await AccessAuthService.createBrowserSessionToken();
+    const app = await buildTestApp();
+
+    try {
+      const status = await app.inject({
+        method: 'GET',
+        url: '/api/access-auth/status',
+        headers: {
+          cookie: `agent-tower-access=${encodeURIComponent(browserSessionToken)}`,
+        },
+      });
+      const scopedCookie = String(status.headers['set-cookie']);
+
+      expect(status.json()).toEqual({ enabled: false, authenticated: true });
+      expect(scopedCookie).toContain(`${AccessAuthService.cookieName}=`);
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/private',
+        headers: { cookie: scopedCookie },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ authKind: 'browser' });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('clears both scoped and legacy cookies on logout', async () => {
+    await AccessAuthService.updateSettings({ enabled: true, newPassword: 'secret-pass' });
+    const app = await buildTestApp();
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/access-auth/logout',
+      });
+      const setCookie = String(response.headers['set-cookie']);
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ enabled: true, authenticated: false });
+      expect(setCookie).toContain(`${AccessAuthService.cookieName}=`);
+      expect(setCookie).toContain('agent-tower-access=');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('does not accept a scoped cookie issued for another data directory', async () => {
+    await AccessAuthService.updateSettings({ enabled: true, newPassword: 'secret-pass' });
+    const login = await AccessAuthService.login('secret-pass');
+    const originalDataDir = process.env.AGENT_TOWER_DATA_DIR;
+    const cookieName = AccessAuthService.cookieName;
+    const app = await buildTestApp();
+
+    try {
+      process.env.AGENT_TOWER_DATA_DIR = path.join(testDir, 'other-instance');
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/private',
+        headers: {
+          cookie: `${cookieName}=${encodeURIComponent(login.sessionToken ?? '')}`,
+        },
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({ code: 'ACCESS_AUTH_REQUIRED' });
+    } finally {
+      if (originalDataDir === undefined) {
+        delete process.env.AGENT_TOWER_DATA_DIR;
+      } else {
+        process.env.AGENT_TOWER_DATA_DIR = originalDataDir;
+      }
       await app.close();
     }
   });

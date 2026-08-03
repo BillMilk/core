@@ -1,5 +1,7 @@
 import { promisify } from 'node:util';
+import path from 'node:path';
 import {
+  createHash,
   createHmac,
   randomBytes,
   scrypt as scryptCallback,
@@ -14,11 +16,14 @@ import type {
 import { ServiceError, ValidationError } from '../errors.js';
 import { getEventBus } from '../core/container.js';
 import { prisma } from '../utils/index.js';
+import { resolveDataDir } from '../utils/data-dir.js';
 import { PREVIEW_ACCESS_TOKEN_VERSION } from '../utils/preview-path.js';
 
 const scrypt = promisify(scryptCallback);
 
-export const ACCESS_AUTH_COOKIE_NAME = 'agent-tower-access';
+export const LEGACY_ACCESS_AUTH_COOKIE_NAME = 'agent-tower-access';
+/** @deprecated This is the legacy cookie name. Use getAccessAuthCookieName() at runtime. */
+export const ACCESS_AUTH_COOKIE_NAME = LEGACY_ACCESS_AUTH_COOKIE_NAME;
 export const ACCESS_AUTH_SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 
 const SETTINGS_ID = 'singleton';
@@ -30,6 +35,8 @@ const MAX_FAILED_LOGIN_ATTEMPTS = 5;
 const LOGIN_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_COOLDOWN_MS = 60 * 1000;
 const PREVIEW_ACCESS_TOKEN_TTL_MS = 10 * 60 * 1000;
+const SETTINGS_CACHE_TTL_MS = 5 * 1000;
+const ACCESS_AUTH_COOKIE_SUFFIX_PATTERN = /^[a-f0-9]{16}$/;
 
 type AccessAuthSettingsRecord = {
   id: string;
@@ -47,11 +54,17 @@ type LoginAttemptState = {
   lockedUntilMs: number;
 };
 
+export type ExtractedAccessAuthCookie = {
+  token: string | null;
+  source: 'scoped' | 'legacy' | null;
+};
+
 const loginAttempts = new Map<string, LoginAttemptState>();
 let nowMs = () => Date.now();
 let sessionSecretGeneration = 0;
 let onBeforeValidateSessionTokenWithGeneration: (() => void) | null = null;
 let settingsCache: AccessAuthSettingsRecord | null = null;
+let settingsCacheLoadedAtMs = 0;
 let settingsLoadPromise: Promise<AccessAuthSettingsRecord> | null = null;
 let settingsDatabaseLoadCount = 0;
 
@@ -64,6 +77,19 @@ export class AccessAuthError extends ServiceError {
 
 function newSecret(): string {
   return randomBytes(32).toString('base64url');
+}
+
+export function getAccessAuthCookieName(dataDir = resolveDataDir()): string {
+  const normalizedDataDir = path.resolve(dataDir);
+  const suffix = createHash('sha256').update(normalizedDataDir).digest('hex').slice(0, 16);
+  return `${LEGACY_ACCESS_AUTH_COOKIE_NAME}-${suffix}`;
+}
+
+export function isAccessAuthCookieName(name: string): boolean {
+  if (name === LEGACY_ACCESS_AUTH_COOKIE_NAME) return true;
+  const prefix = `${LEGACY_ACCESS_AUTH_COOKIE_NAME}-`;
+  return name.startsWith(prefix)
+    && ACCESS_AUTH_COOKIE_SUFFIX_PATTERN.test(name.slice(prefix.length));
 }
 
 function toSafeSettings(settings: AccessAuthSettingsRecord): AccessAuthSafeSettings {
@@ -125,7 +151,12 @@ function splitCookieHeader(cookieHeader?: string): Map<string, string> {
   for (const part of cookieHeader.split(';')) {
     const [rawName, ...rawValue] = part.trim().split('=');
     if (!rawName) continue;
-    result.set(rawName, decodeURIComponent(rawValue.join('=')));
+    const value = rawValue.join('=');
+    try {
+      result.set(rawName, decodeURIComponent(value));
+    } catch {
+      result.set(rawName, value);
+    }
   }
 
   return result;
@@ -180,7 +211,8 @@ async function verifyPassword(password: string, passwordHash: string | null): Pr
 }
 
 async function ensureSettings(): Promise<AccessAuthSettingsRecord> {
-  if (settingsCache) {
+  const cacheAgeMs = nowMs() - settingsCacheLoadedAtMs;
+  if (settingsCache && cacheAgeMs >= 0 && cacheAgeMs < SETTINGS_CACHE_TTL_MS) {
     return settingsCache;
   }
   if (settingsLoadPromise) {
@@ -192,9 +224,7 @@ async function ensureSettings(): Promise<AccessAuthSettingsRecord> {
     const existing = await prisma.accessAuthSettings.findUnique({
       where: { id: SETTINGS_ID },
     });
-    if (existing) return existing;
-
-    return prisma.accessAuthSettings.upsert({
+    const settings = existing ?? await prisma.accessAuthSettings.upsert({
       where: { id: SETTINGS_ID },
       create: {
         id: SETTINGS_ID,
@@ -203,13 +233,18 @@ async function ensureSettings(): Promise<AccessAuthSettingsRecord> {
       },
       update: {},
     });
+    const previousSecret = settingsCache?.sessionSecret;
+    settingsCache = settings;
+    settingsCacheLoadedAtMs = nowMs();
+    if (previousSecret && previousSecret !== settings.sessionSecret) {
+      notifySessionSecretRotated();
+    }
+    return settings;
   })();
   settingsLoadPromise = loadPromise;
 
   try {
-    const settings = await loadPromise;
-    settingsCache = settings;
-    return settings;
+    return await loadPromise;
   } finally {
     if (settingsLoadPromise === loadPromise) {
       settingsLoadPromise = null;
@@ -224,8 +259,23 @@ function notifySessionSecretRotated(): void {
   });
 }
 
+function extractAccessAuthCookieWithSource(cookieHeader?: string): ExtractedAccessAuthCookie {
+  const cookies = splitCookieHeader(cookieHeader);
+  const scopedToken = cookies.get(getAccessAuthCookieName());
+  if (scopedToken !== undefined) {
+    return { token: scopedToken, source: 'scoped' };
+  }
+
+  const legacyToken = cookies.get(LEGACY_ACCESS_AUTH_COOKIE_NAME);
+  if (legacyToken !== undefined) {
+    return { token: legacyToken, source: 'legacy' };
+  }
+
+  return { token: null, source: null };
+}
+
 function extractAccessAuthCookie(cookieHeader?: string): string | null {
-  return splitCookieHeader(cookieHeader).get(ACCESS_AUTH_COOKIE_NAME) ?? null;
+  return extractAccessAuthCookieWithSource(cookieHeader).token;
 }
 
 function createSessionToken(settings: AccessAuthSettingsRecord): string {
@@ -291,7 +341,11 @@ function validatePreviewAccessToken(
 }
 
 export const AccessAuthService = {
-  cookieName: ACCESS_AUTH_COOKIE_NAME,
+  get cookieName(): string {
+    return getAccessAuthCookieName();
+  },
+
+  legacyCookieName: LEGACY_ACCESS_AUTH_COOKIE_NAME,
 
   getCookieOptions(request: FastifyRequest, maxAge = ACCESS_AUTH_SESSION_MAX_AGE_SECONDS) {
     return {
@@ -313,6 +367,7 @@ export const AccessAuthService = {
   },
 
   extractCookieFromHeader: extractAccessAuthCookie,
+  extractCookieFromHeaderWithSource: extractAccessAuthCookieWithSource,
 
   async getSettings(): Promise<AccessAuthSafeSettings> {
     return toSafeSettings(await ensureSettings());
@@ -432,6 +487,7 @@ export const AccessAuthService = {
         },
       });
       settingsCache = settings;
+      settingsCacheLoadedAtMs = nowMs();
       notifySessionSecretRotated();
       return {
         settings: toSafeSettings(settings),
@@ -456,6 +512,7 @@ export const AccessAuthService = {
         },
       });
       settingsCache = settings;
+      settingsCacheLoadedAtMs = nowMs();
       notifySessionSecretRotated();
 
       return {
@@ -487,6 +544,7 @@ export const AccessAuthService = {
         sessionSecret: newSecret(),
       },
     });
+    settingsCacheLoadedAtMs = nowMs();
     notifySessionSecretRotated();
   },
 
@@ -495,6 +553,7 @@ export const AccessAuthService = {
     MAX_FAILED_LOGIN_ATTEMPTS,
     LOGIN_COOLDOWN_MS,
     PREVIEW_ACCESS_TOKEN_TTL_MS,
+    SETTINGS_CACHE_TTL_MS,
     hashPassword,
     verifyPassword,
     validateSessionToken,
@@ -518,6 +577,7 @@ export const AccessAuthService = {
     },
     resetSettingsCache() {
       settingsCache = null;
+      settingsCacheLoadedAtMs = 0;
       settingsLoadPromise = null;
       settingsDatabaseLoadCount = 0;
     },

@@ -455,6 +455,7 @@ describe('previewRoutes access auth integration', () => {
           cookie: [
             gatewayCookie,
             'agent-tower-access=outer-session',
+            'agent-tower-access-0123456789abcdef=outer-scoped-session',
             scopedAccessCookie,
           ].filter(Boolean).join('; '),
         },

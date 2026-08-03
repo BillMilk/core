@@ -138,6 +138,18 @@ describe('preview target cookies', () => {
     expect(rewritten).toContain('SameSite=Lax');
   });
 
+  it('also scopes instance-specific Agent Tower target auth cookies', () => {
+    const rewritten = rewriteTargetCookie(
+      'agent-tower-access-0123456789abcdef=target; Path=/; HttpOnly; SameSite=Lax',
+      target,
+      'agent-tower-preview-workspace',
+      false,
+    );
+
+    expect(rewritten).toContain('agent-tower-preview-workspace-target-');
+    expect(rewritten).not.toMatch(/^agent-tower-access-0123456789abcdef=/);
+  });
+
   it('removes cookie attributes that cannot work on a local HTTP gateway', () => {
     expect(rewriteTargetCookie(
       'session=abc; Path=/; HttpOnly; Secure; SameSite=None; Partitioned',

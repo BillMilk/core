@@ -13,7 +13,10 @@ import {
   TUNNEL_SESSION_COOKIE_NAME,
   extractTunnelSessionTokenFromCookieHeader,
 } from '../utils/tunnel-cookie.js';
-import { AccessAuthService } from '../services/access-auth.service.js';
+import {
+  AccessAuthService,
+  isAccessAuthCookieName,
+} from '../services/access-auth.service.js';
 import {
   INTERNAL_API_TOKEN_HEADER,
   validateInternalApiToken,
@@ -45,11 +48,6 @@ export const PREVIEW_SANDBOX_CSP = [
 ].join(' ');
 const PREVIEW_CORS_ALLOW_METHODS = 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS';
 const PREVIEW_CORS_DEFAULT_ALLOW_HEADERS = 'Content-Type, Accept, Authorization, X-Requested-With';
-const INTERNAL_COOKIE_NAMES = new Set([
-  TUNNEL_SESSION_COOKIE_NAME,
-  AccessAuthService.cookieName,
-]);
-
 type ProxyRequestOptions = http.RequestOptions & { rejectUnauthorized?: boolean };
 
 const configSchema = z.object({
@@ -94,7 +92,9 @@ function filterCookieHeader(cookieHeader?: string): string | undefined {
     .filter(Boolean)
     .filter((part) => {
       const [name] = part.split('=');
-      return name && !INTERNAL_COOKIE_NAMES.has(name);
+      return name
+        && name !== TUNNEL_SESSION_COOKIE_NAME
+        && !isAccessAuthCookieName(name);
     });
 
   return cookies.length > 0 ? cookies.join('; ') : undefined;
