@@ -930,18 +930,32 @@ export function normalizeProviderDraft(
       message: `Agent '${provider.agentType}' does not support the '${runtimeType}' runtime`,
     });
   }
-  const acpPermissionMode = provider.config.permissionMode ?? provider.config.acpPermissionMode;
-  if (
-    runtimeType === RuntimeType.ACP
-    && acpPermissionMode !== undefined
-    && acpPermissionMode !== 'ASK'
-    && acpPermissionMode !== 'AUTO_APPROVE'
-  ) {
-    diagnostics.push({
-      field: 'executionPermission',
-      code: 'INVALID_ENUM',
-      message: 'ACP permissionMode must be ASK or AUTO_APPROVE',
-    });
+  const capability = getProviderCapability(input.agentType);
+  const legacyPermissionPath = capability?.executionPermission.path;
+  const legacyPermissionValue = legacyPermissionPath ? provider.config[legacyPermissionPath] : undefined;
+  const rawAcpPermissionMode = provider.config.permissionMode
+    ?? provider.config.acpPermissionMode
+    ?? (typeof legacyPermissionValue === 'boolean'
+      ? legacyPermissionValue ? 'UNRESTRICTED' : 'ASK'
+      : undefined);
+  if (runtimeType === RuntimeType.ACP && rawAcpPermissionMode !== undefined) {
+    if (
+      rawAcpPermissionMode !== 'ASK'
+      && rawAcpPermissionMode !== 'UNRESTRICTED'
+      && rawAcpPermissionMode !== 'AUTO_APPROVE'
+    ) {
+      diagnostics.push({
+        field: 'executionPermission',
+        code: 'INVALID_ENUM',
+        message: 'ACP permissionMode must be ASK or UNRESTRICTED',
+      });
+    } else {
+      const config = { ...provider.config };
+      config.permissionMode = rawAcpPermissionMode === 'AUTO_APPROVE' ? 'UNRESTRICTED' : rawAcpPermissionMode;
+      delete config.acpPermissionMode;
+      if (legacyPermissionPath) delete config[legacyPermissionPath];
+      provider = { ...provider, config };
+    }
   }
   for (const [key, write] of Object.entries(input.env ?? {})) {
     if (write.action === 'replace' && !write.value.trim()) {
@@ -949,7 +963,6 @@ export function normalizeProviderDraft(
     }
   }
 
-  const capability = getProviderCapability(input.agentType);
   const apiKeyPath = capability?.apiKey?.path;
   const oldSettingsDiagnostics = existing ? validateSettings(existing.agentType, existing.settings) : [];
   const currentSettingsDiagnostics = validateSettings(provider.agentType, provider.settings);

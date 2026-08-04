@@ -460,9 +460,9 @@ class AcpDriverSession implements DriverSession {
       kind: normalizePermissionKind(option.kind),
     }));
     if (options.length === 0) return Promise.resolve({ outcome: { outcome: 'cancelled' } });
-    if (this.providerProfile.permissionMode === 'AUTO_APPROVE') {
-      const selected = options.find((option) => option.kind === 'allow_always')
-        ?? options.find((option) => option.kind === 'allow_once');
+    if (this.providerProfile.permissionMode === 'UNRESTRICTED') {
+      const selected = options.find((option) => option.kind === 'allow_once')
+        ?? options.find((option) => option.kind === 'allow_always');
       return Promise.resolve(selected
         ? { outcome: { outcome: 'selected', optionId: selected.optionId } }
         : { outcome: { outcome: 'cancelled' } });

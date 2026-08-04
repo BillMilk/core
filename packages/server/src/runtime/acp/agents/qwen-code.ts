@@ -1,6 +1,6 @@
 import path from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
-import { AgentType } from '@agent-tower/shared';
+import { AgentType, normalizeRuntimePermissionMode } from '@agent-tower/shared';
 import { which } from '../../../utils/index.js';
 import { AgentRuntimeError } from '../../errors.js';
 import type { AcpAgentDefinition, AcpAgentProfile } from './types.js';
@@ -20,10 +20,13 @@ function projectQwenProvider(
   const appendPrompt = typeof provider?.config.appendPrompt === 'string' && provider.config.appendPrompt
     ? provider.config.appendPrompt
     : undefined;
+  const permissionMode = configuredMode === undefined && provider?.config.yolo === true
+    ? 'UNRESTRICTED'
+    : normalizeRuntimePermissionMode(configuredMode);
   return {
     agentType: AgentType.QWEN_CODE,
     environment,
-    permissionMode: configuredMode === 'AUTO_APPROVE' ? 'AUTO_APPROVE' : 'ASK',
+    permissionMode,
     ...(model ? { model } : {}),
     ...(appendPrompt ? { appendPrompt } : {}),
   };
@@ -51,6 +54,7 @@ export const qwenCodeAcpAgentDefinition: AcpAgentDefinition = {
       args: [
         '--acp',
         '--experimental-skills',
+        ...(profile.permissionMode === 'UNRESTRICTED' ? ['--no-sandbox'] : []),
         ...(profile.model ? ['--model', profile.model] : []),
         ...(profile.environment.OPENAI_API_KEY ? ['--auth-type=openai'] : []),
       ],
@@ -68,10 +72,17 @@ export const qwenCodeAcpAgentDefinition: AcpAgentDefinition = {
 
   async configureSession(context, sessionId, response, profile) {
     if (
-      profile.permissionMode === 'AUTO_APPROVE'
+      profile.permissionMode === 'UNRESTRICTED'
       && response.modes?.currentModeId !== 'yolo'
-      && response.modes?.availableModes.some(mode => mode.id === 'yolo')
     ) {
+      if (!response.modes?.availableModes.some(mode => mode.id === 'yolo')) {
+        throw new AgentRuntimeError(
+          'permission_mode_unsupported',
+          'session',
+          'Qwen Code did not advertise its unrestricted mode',
+          false,
+        );
+      }
       await context.request(acp.methods.agent.session.setMode, { sessionId, modeId: 'yolo' });
     }
   },

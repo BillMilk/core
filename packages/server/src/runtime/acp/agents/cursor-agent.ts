@@ -6,7 +6,12 @@ export const cursorAgentAcpAgentDefinition = createNativeAcpAgentDefinition({
   displayName: 'Cursor Agent',
   executableCandidates: ['agent', 'cursor-agent'],
   executableEnvKeys: ['CURSOR_AGENT_PATH', 'CURSOR_PATH'],
-  arguments: ['acp'],
+  arguments: (_input, profile) => [
+    ...(profile.permissionMode === 'UNRESTRICTED'
+      ? ['--sandbox', 'disabled', '--force', '--approve-mcps']
+      : []),
+    'acp',
+  ],
   homeRelativeCandidates: [['.local', 'bin', 'agent'], ['.local', 'bin', 'cursor-agent'], ['.cursor', 'bin', 'agent']],
   permissionConfigKeys: ['force'],
 });

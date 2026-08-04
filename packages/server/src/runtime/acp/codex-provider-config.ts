@@ -2,6 +2,7 @@ import { parse as parseToml } from 'smol-toml';
 import type * as acp from '@agentclientprotocol/sdk';
 import {
   AgentType,
+  normalizeRuntimePermissionMode,
   type Provider,
   type RuntimePermissionMode,
 } from '@agent-tower/shared';
@@ -172,9 +173,12 @@ export function projectCodexAcpProvider(
   const fastMode = typeof provider.config.fastMode === 'boolean'
     ? provider.config.fastMode
     : undefined;
+  const permissionMode = configuredMode === undefined && provider.config.dangerouslyBypassApprovalsAndSandbox === true
+    ? 'UNRESTRICTED'
+    : normalizeRuntimePermissionMode(configuredMode);
   return {
     environment,
-    permissionMode: configuredMode === 'AUTO_APPROVE' ? 'AUTO_APPROVE' : 'ASK',
+    permissionMode,
     ...(authenticationRequest ? { authenticationRequest } : {}),
     ...(appendPrompt ? { appendPrompt } : {}),
     ...(fastMode !== undefined ? { fastMode } : {}),

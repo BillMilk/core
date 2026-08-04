@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { access, stat } from 'node:fs/promises';
 import path from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
-import type { AgentType } from '@agent-tower/shared';
+import { normalizeRuntimePermissionMode, type AgentType } from '@agent-tower/shared';
 import { which } from '../../../utils/index.js';
 import { AgentRuntimeError } from '../../errors.js';
 import type { RuntimeOpenInput } from '../../contracts.js';
@@ -26,7 +26,7 @@ interface NativeAgentOptions {
   permissionConfigKeys?: string[];
   configureSessionModel?: boolean;
   sessionModelValue?: (profile: AcpAgentProfile) => string | undefined;
-  autoApproveModeId?: string;
+  unrestrictedModeId?: string;
   buildEnvironment?: (profile: AcpAgentProfile) => Record<string, string>;
   prepareLaunch?: (
     input: RuntimeOpenInput,
@@ -50,11 +50,14 @@ export function createNativeAcpAgentDefinition(options: NativeAgentOptions): Acp
     const appendPrompt = readNonEmptyString(provider?.config.appendPrompt);
     const configuredMode = provider?.config.permissionMode ?? provider?.config.acpPermissionMode;
     const permissionEnabled = options.permissionConfigKeys?.some(key => provider?.config[key] === true) ?? false;
+    const permissionMode = configuredMode === undefined
+      ? permissionEnabled ? 'UNRESTRICTED' : 'ASK'
+      : normalizeRuntimePermissionMode(configuredMode);
 
     return {
       agentType: options.agentType,
       environment,
-      permissionMode: configuredMode === 'AUTO_APPROVE' || permissionEnabled ? 'AUTO_APPROVE' : 'ASK',
+      permissionMode,
       ...(model ? { model } : {}),
       ...(effort ? { effort } : {}),
       ...(appendPrompt ? { appendPrompt } : {}),
@@ -113,14 +116,21 @@ export function createNativeAcpAgentDefinition(options: NativeAgentOptions): Acp
         });
       }
       if (
-        profile.permissionMode === 'AUTO_APPROVE'
-        && options.autoApproveModeId
-        && response.modes?.currentModeId !== options.autoApproveModeId
-        && response.modes?.availableModes.some(mode => mode.id === options.autoApproveModeId)
+        profile.permissionMode === 'UNRESTRICTED'
+        && options.unrestrictedModeId
+        && response.modes?.currentModeId !== options.unrestrictedModeId
       ) {
+        if (!response.modes?.availableModes.some(mode => mode.id === options.unrestrictedModeId)) {
+          throw new AgentRuntimeError(
+            'permission_mode_unsupported',
+            'session',
+            `${options.displayName} did not advertise its unrestricted mode`,
+            false,
+          );
+        }
         await context.request(acp.methods.agent.session.setMode, {
           sessionId,
-          modeId: options.autoApproveModeId,
+          modeId: options.unrestrictedModeId,
         });
       }
     },
@@ -137,7 +147,7 @@ export async function geminiAcpArguments(
   return [
     acpFlag,
     ...(profile.model ? ['--model', profile.model] : []),
-    ...(profile.permissionMode === 'AUTO_APPROVE' ? ['--approval-mode', 'yolo'] : []),
+    ...(profile.permissionMode === 'UNRESTRICTED' ? ['--no-sandbox', '--approval-mode', 'yolo'] : []),
   ];
 }
 

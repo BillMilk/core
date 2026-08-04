@@ -57,7 +57,12 @@ export type RuntimeTurnState =
   | 'CANCELLING'
   | 'DISPOSED'
 
-export type RuntimePermissionMode = 'ASK' | 'AUTO_APPROVE'
+export type RuntimePermissionMode = 'ASK' | 'UNRESTRICTED'
+
+/** Normalize persisted ACP permission values. AUTO_APPROVE is the legacy unrestricted value. */
+export function normalizeRuntimePermissionMode(value: unknown): RuntimePermissionMode {
+  return value === 'UNRESTRICTED' || value === 'AUTO_APPROVE' ? 'UNRESTRICTED' : 'ASK'
+}
 
 export interface RuntimeCapabilities {
   loadSession: boolean

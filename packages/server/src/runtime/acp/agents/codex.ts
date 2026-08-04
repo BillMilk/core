@@ -94,6 +94,20 @@ export const codexAcpAgentDefinition: AcpAgentDefinition = {
   },
 
   async configureSession(context, sessionId, response, profile) {
+    if (profile.permissionMode === 'UNRESTRICTED' && response.modes?.currentModeId !== 'agent-full-access') {
+      if (!response.modes?.availableModes.some(mode => mode.id === 'agent-full-access')) {
+        throw new AgentRuntimeError(
+          'permission_mode_unsupported',
+          'session',
+          'Codex did not advertise agent-full-access',
+          false,
+        );
+      }
+      await context.request(acp.methods.agent.session.setMode, {
+        sessionId,
+        modeId: 'agent-full-access',
+      });
+    }
     if (profile.fastMode === undefined) return;
     const option = response.configOptions?.find(candidate => candidate.id === 'fast-mode');
     if (!option) return;

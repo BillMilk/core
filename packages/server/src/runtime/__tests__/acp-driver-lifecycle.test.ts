@@ -21,6 +21,10 @@ const acpState = vi.hoisted(() => ({
   loadUpdates: [] as Array<{ sessionId: string; update: Record<string, unknown> }>,
   supportsResume: true,
   notificationHandler: undefined as undefined | ((request: { params: unknown }) => Promise<void>),
+  permissionHandler: undefined as undefined | ((request: {
+    params: Record<string, unknown>;
+    signal: AbortSignal;
+  }) => Promise<unknown>),
   prompt: undefined as undefined | {
     promise: Promise<{ stopReason?: string }>;
     resolve: (value: { stopReason?: string }) => void;
@@ -109,7 +113,10 @@ vi.mock('@agentclientprotocol/sdk', () => {
       acpState.notificationHandler = handler;
       return app;
     }),
-    onRequest: vi.fn(() => app),
+    onRequest: vi.fn((_method: string, handler: typeof acpState.permissionHandler) => {
+      acpState.permissionHandler = handler;
+      return app;
+    }),
     connect: vi.fn(() => connection),
   };
   return {
@@ -158,6 +165,7 @@ beforeEach(() => {
   acpState.loadUpdates = [];
   acpState.supportsResume = true;
   acpState.notificationHandler = undefined;
+  acpState.permissionHandler = undefined;
   acpState.prompt = deferred<{ stopReason?: string }>();
   acpState.processStarts = 0;
   acpState.processStops = 0;
@@ -165,6 +173,50 @@ beforeEach(() => {
 });
 
 describe('AcpRuntimeDriver lifecycle', () => {
+  it('uses non-persistent permission approval as the unrestricted fallback', async () => {
+    providerState.provider = {
+      id: 'opencode-acp-unrestricted',
+      name: 'OpenCode ACP Unrestricted',
+      agentType: AgentType.OPENCODE,
+      runtimeType: RuntimeType.ACP,
+      env: { OPENCODE_PATH: process.execPath },
+      config: { permissionMode: 'UNRESTRICTED' },
+      isDefault: false,
+    };
+    const { sink, input } = setup();
+    const session = await new AcpRuntimeDriver().open({
+      ...input,
+      agentType: AgentType.OPENCODE,
+      providerId: providerState.provider.id,
+      env: input.env.set('OPENCODE_PATH', process.execPath),
+    }, sink);
+    const turn = await session.runTurn({
+      turnId: 'turn-unrestricted',
+      prompt: 'run a tool',
+      msgStore: new MsgStore(),
+      resumeExternalSessionId: 'external-1',
+    }, sink);
+
+    const response = await acpState.permissionHandler?.({
+      params: {
+        sessionId: 'external-1',
+        options: [
+          { optionId: 'always', name: 'Always allow', kind: 'allow_always' },
+          { optionId: 'once', name: 'Allow once', kind: 'allow_once' },
+        ],
+        toolCall: { toolCallId: 'tool-1', title: 'Run command', kind: 'execute' },
+      },
+      signal: new AbortController().signal,
+    });
+
+    expect(response).toEqual({ outcome: { outcome: 'selected', optionId: 'once' } });
+    expect(vi.mocked(sink.stream).mock.calls.map(([event]) => event.type)).not.toContain('permission_requested');
+
+    await session.cancelTurn('turn-unrestricted');
+    await turn.completion;
+    await session.close();
+  });
+
   it('merges Codex gateway auth capability with the shared session capability', async () => {
     acpState.authMethods = [{ id: 'gateway', name: 'Custom model gateway' }];
     providerState.provider = {

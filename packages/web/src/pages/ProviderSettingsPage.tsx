@@ -291,7 +291,8 @@ const CONFIG_FIELD_OPTION_LABELS: Record<string, Record<string, string>> = Objec
 
 CONFIG_FIELD_OPTION_LABELS.permissionMode = {
   ASK: '每次询问',
-  AUTO_APPROVE: '自动批准',
+  AUTO_APPROVE: '无限制',
+  UNRESTRICTED: '无限制',
 }
 
 function formatConfigValue(key: string, value: unknown): string {
@@ -486,12 +487,17 @@ export function ProviderFormModal({
     : null
   const permissionState = getExecutionPermissionState(formData.config, capability)
   const rawAcpPermissionMode = formData.config.permissionMode ?? formData.config.acpPermissionMode
-  const acpPermissionMode = rawAcpPermissionMode === 'AUTO_APPROVE' ? 'AUTO_APPROVE' : 'ASK'
+  const acpPermissionMode = rawAcpPermissionMode === 'UNRESTRICTED'
+    || rawAcpPermissionMode === 'AUTO_APPROVE'
+    || (rawAcpPermissionMode === undefined && permissionState.enabled)
+    ? 'UNRESTRICTED'
+    : 'ASK'
   const acpPermissionModeError = formData.runtimeType === RuntimeType.ACP
     && rawAcpPermissionMode !== undefined
     && rawAcpPermissionMode !== 'ASK'
+    && rawAcpPermissionMode !== 'UNRESTRICTED'
     && rawAcpPermissionMode !== 'AUTO_APPROVE'
-    ? t('ACP 权限策略必须为 ASK 或 AUTO_APPROVE')
+    ? t('ACP 权限策略必须为 ASK 或 UNRESTRICTED')
     : null
   const websocketCapability = capability.disableResponsesWebsocket
   const websocketState = websocketCapability
@@ -806,18 +812,25 @@ export function ProviderFormModal({
               <label className="mb-1 block text-xs font-medium text-foreground">{t('权限策略')}</label>
               <Select
                 value={acpPermissionMode}
-                onChange={permissionMode => updateForm(previous => {
-                  const config: Record<string, unknown> = { ...previous.config, permissionMode }
-                  delete config.acpPermissionMode
-                  const next = { ...previous, config }
-                  setConfigText(JSON.stringify(next.config, null, 2))
-                  return next
-                })}
+                onChange={permissionMode => {
+                  updateForm(previous => {
+                    const config: Record<string, unknown> = { ...previous.config, permissionMode }
+                    delete config.acpPermissionMode
+                    const next = { ...previous, config }
+                    setConfigText(JSON.stringify(next.config, null, 2))
+                    return next
+                  })
+                }}
                 options={[
                   { value: 'ASK', label: t('每次询问') },
-                  { value: 'AUTO_APPROVE', label: t('自动批准') },
+                  { value: 'UNRESTRICTED', label: t('无限制') },
                 ]}
               />
+              {acpPermissionMode === 'UNRESTRICTED' && (
+                <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                  {t('Agent 将拥有完全访问电脑的权限')}
+                </p>
+              )}
               {acpPermissionModeError && (
                 <p role="alert" className="mt-1 text-xs text-destructive">{acpPermissionModeError}</p>
               )}

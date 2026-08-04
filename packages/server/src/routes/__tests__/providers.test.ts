@@ -235,7 +235,7 @@ describe('provider routes', () => {
         agentType,
         runtimeType: RuntimeType.ACP,
         env: { [secretKey]: { action: 'replace', value: secret } },
-        config: { permissionMode: 'AUTO_APPROVE' },
+        config: { permissionMode: 'UNRESTRICTED' },
         simplified: { apiBaseUrl, model, reasoningEffort },
       },
     });
@@ -245,7 +245,7 @@ describe('provider routes', () => {
     expect(created.json()).toMatchObject({
       agentType,
       runtimeType: RuntimeType.ACP,
-      config: { model, permissionMode: 'AUTO_APPROVE' },
+      config: { model, permissionMode: 'UNRESTRICTED' },
       redactedEnv: { [secretKey]: { configured: true, sensitive: true } },
       simplified: {
         apiBaseUrl,
@@ -254,6 +254,56 @@ describe('provider routes', () => {
       },
     });
     expect(getProviderById(created.json().id)?.runtimeType).toBe(RuntimeType.ACP);
+    await app.close();
+  });
+
+  it('migrates the legacy ACP AUTO_APPROVE value to UNRESTRICTED', async () => {
+    const app = await createApp();
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/providers',
+      payload: {
+        name: 'Legacy ACP Permission',
+        agentType: AgentType.CODEX,
+        runtimeType: RuntimeType.ACP,
+        config: { permissionMode: 'AUTO_APPROVE' },
+      },
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({
+      config: { permissionMode: 'UNRESTRICTED' },
+    });
+    await app.close();
+  });
+
+  it('migrates legacy Agent permission flags without overriding an explicit ASK mode', async () => {
+    const app = await createApp();
+    const legacyFlag = await app.inject({
+      method: 'POST',
+      url: '/api/providers',
+      payload: {
+        name: 'Legacy Cursor Force',
+        agentType: AgentType.CURSOR_AGENT,
+        runtimeType: RuntimeType.ACP,
+        config: { force: true },
+      },
+    });
+    expect(legacyFlag.statusCode).toBe(201);
+    expect(legacyFlag.json().config).toEqual({ permissionMode: 'UNRESTRICTED' });
+
+    const explicitAsk = await app.inject({
+      method: 'POST',
+      url: '/api/providers',
+      payload: {
+        name: 'Explicit Ask Overrides Legacy',
+        agentType: AgentType.QWEN_CODE,
+        runtimeType: RuntimeType.ACP,
+        config: { permissionMode: 'ASK', yolo: true },
+      },
+    });
+    expect(explicitAsk.statusCode).toBe(201);
+    expect(explicitAsk.json().config).toEqual({ permissionMode: 'ASK' });
     await app.close();
   });
 

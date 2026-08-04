@@ -10,7 +10,7 @@ export const kiroCliAcpAgentDefinition = createNativeAcpAgentDefinition({
     'acp',
     ...(profile.model ? ['--model', profile.model] : []),
     ...(profile.effort ? ['--effort', profile.effort] : []),
-    ...(profile.permissionMode === 'AUTO_APPROVE' ? ['--trust-all-tools'] : []),
+    ...(profile.permissionMode === 'UNRESTRICTED' ? ['--trust-all-tools'] : []),
   ],
   homeRelativeCandidates: [['.local', 'bin', 'kiro-cli'], ['.kiro', 'bin', 'kiro-cli']],
   permissionConfigKeys: ['trustAllTools'],

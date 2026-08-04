@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
-import { AgentType, type McpConfigResponse } from '@agent-tower/shared';
+import { AgentType, normalizeRuntimePermissionMode, type McpConfigResponse } from '@agent-tower/shared';
 import { which } from '../../../utils/index.js';
 import { buildMcpConfigResponse } from '../../../services/mcp-config.service.js';
 import { AgentRuntimeError } from '../../errors.js';
@@ -26,12 +26,13 @@ export const piCodingAgentAcpAgentDefinition: AcpAgentDefinition = {
     const effort = readNonEmptyString(provider?.config.effort);
     const appendPrompt = readNonEmptyString(provider?.config.appendPrompt);
     const configuredMode = provider?.config.permissionMode ?? provider?.config.acpPermissionMode;
+    const permissionMode = configuredMode === undefined
+      ? provider?.config.autoApprove === true ? 'UNRESTRICTED' : 'ASK'
+      : normalizeRuntimePermissionMode(configuredMode);
     return {
       agentType: AgentType.PI_CODING_AGENT,
       environment,
-      permissionMode: configuredMode === 'AUTO_APPROVE' || provider?.config.autoApprove === true
-        ? 'AUTO_APPROVE'
-        : 'ASK',
+      permissionMode,
       ...(model ? { model } : {}),
       ...(effort ? { effort } : {}),
       ...(appendPrompt ? { appendPrompt } : {}),

@@ -35,7 +35,7 @@ describe('AcpRuntimeDriver', () => {
       DEFAULT_AUTH_REQUEST: JSON.stringify({ methodId: 'api-key', apiKey: 'stale-auth-secret' }),
     });
 
-    expect(projection.permissionMode).toBe('AUTO_APPROVE');
+    expect(projection.permissionMode).toBe('UNRESTRICTED');
     expect(projection.fastMode).toBe(true);
     expect(projection.appendPrompt).toBe('\nFollow repository instructions.');
     expect(projection.environment.OPENAI_BASE_URL).toBeUndefined();

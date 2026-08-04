@@ -12,7 +12,7 @@ export const minionCodeAcpAgentDefinition = createNativeAcpAgentDefinition({
   arguments: (_input, profile) => [
     'acp',
     ...(profile.model ? ['--model', profile.model] : []),
-    ...(profile.permissionMode === 'AUTO_APPROVE' ? ['--dangerously-skip-permissions'] : []),
+    ...(profile.permissionMode === 'UNRESTRICTED' ? ['--dangerously-skip-permissions'] : []),
   ],
   homeRelativeCandidates: [['.local', 'bin', 'mcode']],
   permissionConfigKeys: ['dangerouslySkipPermissions'],

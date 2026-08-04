@@ -68,7 +68,7 @@ describe('ACP Agent definitions', () => {
       agentType: AgentType.CLAUDE_CODE,
       model: 'claude-sonnet-4-5',
       effort: 'high',
-      permissionMode: 'AUTO_APPROVE',
+      permissionMode: 'UNRESTRICTED',
       appendPrompt: '\nUse the repository conventions.',
     });
     expect(profile.environment).toMatchObject({
@@ -84,6 +84,7 @@ describe('ACP Agent definitions', () => {
               model: 'claude-sonnet-4-5',
               effortLevel: 'high',
               permissions: { defaultMode: 'acceptEdits' },
+              sandbox: { enabled: false },
             },
           },
         },
@@ -114,6 +115,23 @@ describe('ACP Agent definitions', () => {
       { sessionId: 'session-1', configId: 'effort', value: 'max' },
       { sessionId: 'session-1', modeId: 'bypassPermissions' },
     ]);
+  });
+
+  it('fails Claude unrestricted startup when bypassPermissions is unavailable', async () => {
+    const definition = getAcpAgentDefinition(AgentType.CLAUDE_CODE);
+    const profile = definition.projectProvider(provider(AgentType.CLAUDE_CODE, {
+      config: { permissionMode: 'UNRESTRICTED' },
+    }), {});
+
+    await expect(definition.configureSession?.({ request: vi.fn() } as unknown as acp.ClientContext, 'session-1', {
+      modes: {
+        currentModeId: 'default',
+        availableModes: [{ id: 'default' }],
+      } as never,
+    }, profile)).rejects.toMatchObject({
+      code: 'permission_mode_unsupported',
+      stage: 'session',
+    });
   });
 
   it('uses the bundled Claude runtime without a global claude command', async () => {
@@ -311,6 +329,40 @@ describe('ACP Agent definitions', () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it('switches Codex unrestricted Providers to agent-full-access without requiring Fast mode', async () => {
+    const definition = getAcpAgentDefinition(AgentType.CODEX);
+    const profile = definition.projectProvider(provider(AgentType.CODEX, {
+      config: { permissionMode: 'UNRESTRICTED' },
+    }), {});
+    const request = vi.fn().mockResolvedValue({});
+
+    await definition.configureSession?.({ request } as unknown as acp.ClientContext, 'codex-unrestricted', {
+      modes: {
+        currentModeId: 'agent',
+        availableModes: [{ id: 'agent' }, { id: 'agent-full-access' }],
+      } as never,
+    }, profile);
+
+    expect(request).toHaveBeenCalledWith(acp.methods.agent.session.setMode, {
+      sessionId: 'codex-unrestricted',
+      modeId: 'agent-full-access',
+    });
+  });
+
+  it('fails Codex unrestricted startup when full access is unavailable', async () => {
+    const definition = getAcpAgentDefinition(AgentType.CODEX);
+    const profile = definition.projectProvider(provider(AgentType.CODEX, {
+      config: { permissionMode: 'UNRESTRICTED' },
+    }), {});
+
+    await expect(definition.configureSession?.({ request: vi.fn() } as unknown as acp.ClientContext, 'codex-limited', {
+      modes: {
+        currentModeId: 'agent',
+        availableModes: [{ id: 'agent' }],
+      } as never,
+    }, profile)).rejects.toMatchObject({ code: 'permission_mode_unsupported' });
+  });
+
   it('does not configure Codex Fast mode when the current model does not advertise it', async () => {
     const definition = getAcpAgentDefinition(AgentType.CODEX);
     const profile = definition.projectProvider(provider(AgentType.CODEX, {
@@ -344,7 +396,7 @@ describe('ACP Agent definitions', () => {
     expect(profile).toMatchObject({
       agentType: AgentType.QWEN_CODE,
       model: 'qwen3-coder-plus',
-      permissionMode: 'AUTO_APPROVE',
+      permissionMode: 'UNRESTRICTED',
       environment: {
         OPENAI_API_KEY: 'qwen-provider-key',
         OPENAI_BASE_URL: 'https://dashscope.example/v1',
@@ -352,7 +404,7 @@ describe('ACP Agent definitions', () => {
     });
   });
 
-  it('switches Qwen to yolo mode only when auto approve is requested and available', async () => {
+  it('switches Qwen to yolo mode only when unrestricted access is requested and available', async () => {
     const definition = getAcpAgentDefinition(AgentType.QWEN_CODE);
     const profile = definition.projectProvider(provider(AgentType.QWEN_CODE, {
       config: { permissionMode: 'AUTO_APPROVE' },
@@ -369,6 +421,20 @@ describe('ACP Agent definitions', () => {
 
     expect(request).toHaveBeenCalledOnce();
     expect(request.mock.calls[0]?.[1]).toEqual({ sessionId: 'session-2', modeId: 'yolo' });
+  });
+
+  it('fails Qwen unrestricted startup when yolo mode is unavailable', async () => {
+    const definition = getAcpAgentDefinition(AgentType.QWEN_CODE);
+    const profile = definition.projectProvider(provider(AgentType.QWEN_CODE, {
+      config: { permissionMode: 'UNRESTRICTED' },
+    }), {});
+
+    await expect(definition.configureSession?.({ request: vi.fn() } as unknown as acp.ClientContext, 'qwen-limited', {
+      modes: {
+        currentModeId: 'default',
+        availableModes: [{ id: 'default' }],
+      } as never,
+    }, profile)).rejects.toMatchObject({ code: 'permission_mode_unsupported' });
   });
 
   it('builds native ACP arguments and managed environments per client', async () => {
@@ -388,6 +454,38 @@ describe('ACP Agent definitions', () => {
     const kiroLaunch = await kiro.resolveLaunch({ ...input, agentType: AgentType.KIRO_CLI }, kiroProfile);
     expect(kiroLaunch.args).toEqual(['acp', '--model', 'kiro-model', '--effort', 'high', '--trust-all-tools']);
     expect(kiroLaunch.env).not.toHaveProperty('DISABLE_MCP_CONFIG_FILTERING');
+
+    const cursor = getAcpAgentDefinition(AgentType.CURSOR_AGENT);
+    const cursorProfile = cursor.projectProvider(provider(AgentType.CURSOR_AGENT, {
+      env: { CURSOR_AGENT_PATH: process.execPath },
+      config: { permissionMode: 'UNRESTRICTED' },
+    }), {});
+    const cursorLaunch = await cursor.resolveLaunch({ ...input, agentType: AgentType.CURSOR_AGENT }, cursorProfile);
+    expect(cursorLaunch.args).toEqual(['--sandbox', 'disabled', '--force', '--approve-mcps', 'acp']);
+
+    const cursorAskProfile = cursor.projectProvider(provider(AgentType.CURSOR_AGENT, {
+      env: { CURSOR_AGENT_PATH: process.execPath },
+      config: { permissionMode: 'ASK', force: true },
+    }), {});
+    const cursorAskLaunch = await cursor.resolveLaunch({ ...input, agentType: AgentType.CURSOR_AGENT }, cursorAskProfile);
+    expect(cursorAskProfile.permissionMode).toBe('ASK');
+    expect(cursorAskLaunch.args).toEqual(['acp']);
+
+    const gemini = getAcpAgentDefinition(AgentType.GEMINI_CLI);
+    const geminiProfile = gemini.projectProvider(provider(AgentType.GEMINI_CLI, {
+      env: { GEMINI_PATH: process.execPath },
+      config: { permissionMode: 'UNRESTRICTED' },
+    }), {});
+    const geminiLaunch = await gemini.resolveLaunch({ ...input, agentType: AgentType.GEMINI_CLI }, geminiProfile);
+    expect(geminiLaunch.args).toEqual(['--experimental-acp', '--no-sandbox', '--approval-mode', 'yolo']);
+
+    const qwen = getAcpAgentDefinition(AgentType.QWEN_CODE);
+    const qwenProfile = qwen.projectProvider(provider(AgentType.QWEN_CODE, {
+      env: { QWEN_PATH: process.execPath },
+      config: { permissionMode: 'UNRESTRICTED' },
+    }), {});
+    const qwenLaunch = await qwen.resolveLaunch({ ...input, agentType: AgentType.QWEN_CODE }, qwenProfile);
+    expect(qwenLaunch.args).toEqual(['--acp', '--experimental-skills', '--no-sandbox']);
 
     const openCode = getAcpAgentDefinition(AgentType.OPENCODE);
     const openCodeProfile = openCode.projectProvider(provider(AgentType.OPENCODE, {

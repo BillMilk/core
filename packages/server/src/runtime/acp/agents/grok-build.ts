@@ -9,7 +9,7 @@ export const grokBuildAcpAgentDefinition = createNativeAcpAgentDefinition({
   arguments: (_input, profile) => [
     'agent',
     ...(profile.model ? ['--model', profile.model] : []),
-    ...(profile.permissionMode === 'AUTO_APPROVE' ? ['--always-approve'] : []),
+    ...(profile.permissionMode === 'UNRESTRICTED' ? ['--always-approve'] : []),
     ...(profile.environment.OPENAI_BASE_URL
       ? ['--xai-api-base-url', profile.environment.OPENAI_BASE_URL]
       : []),

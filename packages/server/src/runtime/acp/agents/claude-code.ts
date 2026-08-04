@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
-import { AgentType } from '@agent-tower/shared';
+import { AgentType, normalizeRuntimePermissionMode } from '@agent-tower/shared';
 import { which } from '../../../utils/index.js';
 import { AgentRuntimeError } from '../../errors.js';
 import { isExecutableFile, resolveBundledClaudeExecutable } from './executable-resolution.js';
@@ -57,10 +57,13 @@ function projectClaudeProvider(
   const appendPrompt = typeof provider?.config.appendPrompt === 'string' && provider.config.appendPrompt
     ? provider.config.appendPrompt
     : undefined;
+  const permissionMode = configuredMode === undefined && provider?.config.dangerouslySkipPermissions === true
+    ? 'UNRESTRICTED'
+    : normalizeRuntimePermissionMode(configuredMode);
   return {
     agentType: AgentType.CLAUDE_CODE,
     environment,
-    permissionMode: configuredMode === 'AUTO_APPROVE' ? 'AUTO_APPROVE' : 'ASK',
+    permissionMode,
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
     ...(appendPrompt ? { appendPrompt } : {}),
@@ -134,6 +137,15 @@ export const claudeCodeAcpAgentDefinition: AcpAgentDefinition = {
     const settings = structuredClone(profile.settings ?? {});
     if (profile.model) settings.model = profile.model;
     if (profile.effort) settings.effortLevel = profile.effort;
+    if (profile.permissionMode === 'UNRESTRICTED') {
+      const configuredSandbox = settings.sandbox;
+      settings.sandbox = {
+        ...(configuredSandbox && typeof configuredSandbox === 'object' && !Array.isArray(configuredSandbox)
+          ? configuredSandbox
+          : {}),
+        enabled: false,
+      };
+    }
     return { _meta: { claudeCode: { options: { settings } } } };
   },
 
@@ -154,12 +166,19 @@ export const claudeCodeAcpAgentDefinition: AcpAgentDefinition = {
         value: profile.effort,
       });
     }
-    const desiredMode = profile.permissionMode === 'AUTO_APPROVE' ? 'bypassPermissions' : 'default';
-    if (
-      response.modes?.currentModeId !== desiredMode
-      && response.modes?.availableModes.some(mode => mode.id === desiredMode)
-    ) {
-      await context.request(acp.methods.agent.session.setMode, { sessionId, modeId: desiredMode });
+    const desiredMode = profile.permissionMode === 'UNRESTRICTED' ? 'bypassPermissions' : 'default';
+    if (response.modes?.currentModeId === desiredMode) return;
+    if (!response.modes?.availableModes.some(mode => mode.id === desiredMode)) {
+      if (profile.permissionMode === 'UNRESTRICTED') {
+        throw new AgentRuntimeError(
+          'permission_mode_unsupported',
+          'session',
+          'Claude Code did not advertise bypassPermissions',
+          false,
+        );
+      }
+      return;
     }
+    await context.request(acp.methods.agent.session.setMode, { sessionId, modeId: desiredMode });
   },
 };

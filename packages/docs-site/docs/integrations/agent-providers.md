@@ -37,7 +37,9 @@ Provider 页面不会使用 CLI/ACP Tab。创建配置时，Agent 下拉会直�
 ACP Provider 可以选择权限策略：
 
 - `ASK`：Agent 请求工具权限时，在 Session 面板中等待用户选择 Agent 提供的选项。
-- `AUTO_APPROVE`：自动选择 Agent 提供的允许选项；如果没有允许选项则取消该请求。
+- `UNRESTRICTED`：关闭 Agent 的沙盒或受限执行模式，并使用 Agent 原生的 full access、bypass、yolo 或 force 能力；没有原生全权限模式的 Agent 才由 Agent Tower 自动响应剩余的工具权限请求。
+
+旧 Provider 中的 `AUTO_APPROVE` 按 `UNRESTRICTED` 兼容读取，并在下次保存时迁移为新值。无限制只跳过工具执行权限；登录、表单提问和其他需要用户输入的交互仍会正常显示。
 
 ACP Provider 沿用对应 Agent 的认证与模型配置，而不是使用一套 ACP 专属密钥：
 

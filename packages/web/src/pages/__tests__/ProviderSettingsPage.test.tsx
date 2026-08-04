@@ -130,13 +130,17 @@ describe('ProviderFormModal draft test invalidation', () => {
     expect([...document.querySelectorAll('button')].some(button => button.textContent?.trim() === 'ACP')).toBe(false)
 
     act(() => findButton('每次询问').click())
-    act(() => findButton('自动批准').click())
+    act(() => findButton('无限制').click())
+
+    expect(window.confirm).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('Agent 将拥有完全访问电脑的权限')
+
     act(() => findButton('保存 Provider').click())
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
       agentType: AgentType.CODEX,
       runtimeType: RuntimeType.ACP,
-      config: expect.objectContaining({ permissionMode: 'AUTO_APPROVE' }),
+      config: expect.objectContaining({ permissionMode: 'UNRESTRICTED' }),
     }))
   })
 
@@ -167,6 +171,23 @@ describe('ProviderFormModal draft test invalidation', () => {
       runtimeType: RuntimeType.ACP,
       config: { permissionMode: 'ASK' },
     }))
+  })
+
+  it('renders a legacy ACP yolo flag as unrestricted access', () => {
+    renderModal({
+      name: 'Legacy Qwen ACP',
+      agentType: AgentType.QWEN_CODE,
+      runtimeType: RuntimeType.ACP,
+      config: { yolo: true },
+      settings: '',
+      env: [],
+      simplified: {},
+      diagnostics: [],
+      isDefault: false,
+    })
+
+    expect(findButton('无限制')).not.toBeNull()
+    expect(document.body.textContent).toContain('Agent 将拥有完全访问电脑的权限')
   })
 
   it('does not restore an old response after a structured field changes', () => {
