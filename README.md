@@ -4,6 +4,15 @@
 
 > Too many terminal sessions (Claude Code / Codex ...) open? Here's their command center.
 
+<p align="center">
+  <img src="./docs/assets/agent-tower-demo.gif" alt="Agent Tower CLI selection, live Codex execution, and automatic review workflow" width="100%" />
+</p>
+
+<p align="center">
+  <strong>Team mode: Codex implementation · Claude Code DeepSeek V4 review · Codex verification</strong><br />
+  <img src="./docs/assets/agent-tower-team-demo.gif" alt="Agent Tower Team mode with Codex implementation, Claude Code DeepSeek V4 review, Codex verification, and automatic review transition" width="100%" />
+</p>
+
 ## Why I Built This
 
 When I first started using Claude Code, I'd open one terminal and sit there, bored, watching it spit out characters. Then I got clever — opened multiple terminals, ran different tasks at the same time, even worked on different projects simultaneously. Productivity went through the roof. I felt like an absolute genius.

@@ -4,6 +4,11 @@
 
 > 你的终端会话窗口（Claude Code / Codex ...）太多了？这里是它们的指挥中心。
 
+<p align="center">
+  <strong>团队模式：Codex 实现 · Claude Code DeepSeek V4 审查 · Codex 验证</strong><br />
+  <img src="./docs/assets/agent-tower-team-demo-zh.gif" alt="Agent Tower 团队模式：Codex 实现、Claude Code DeepSeek V4 审查、Codex 验证并自动进入待审查" width="100%" />
+</p>
+
 ## 为什么做这个项目
 
 刚开始用 Claude Code 的时候，我开一个终端，无聊地等它吐完所有字符。后来我学聪明了——开多个终端，同时跑不同的任务，甚至同时开不同的项目。效率直接起飞，这可把我牛逼坏了。
