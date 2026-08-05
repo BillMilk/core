@@ -36,6 +36,16 @@ function estimateMsgBytes(msg: LogMsg): number {
   }
 }
 
+function applyStoredPatch(
+  conversation: NormalizedConversation,
+  patch: JsonPatch,
+): NormalizedConversation {
+  // fast-json-patch inserts operation values by reference when mutating the
+  // document. Clone the patch so cached snapshots cannot mutate replay history.
+  const replayPatch = structuredClone(patch) as Operation[]
+  return applyPatch(conversation, replayPatch, true, true).newDocument as NormalizedConversation
+}
+
 /**
  * MsgStore 类
  * 管理消息的存储、历史回放和实时流式传输
@@ -217,8 +227,7 @@ export class MsgStore {
         ? (JSON.parse(JSON.stringify(this.baseSnapshot)) as NormalizedConversation)
         : { entries: [] };
       try {
-        const result = applyPatch(base, removed.patch as Operation[], true, true);
-        this.baseSnapshot = result.newDocument as NormalizedConversation;
+        this.baseSnapshot = applyStoredPatch(base, removed.patch);
       } catch (error) {
         const first = (removed.patch as Array<{ op?: string; path?: string }>)[0];
         console.warn(
@@ -292,8 +301,7 @@ export class MsgStore {
         const msg = this.messages[i];
         if (msg.type === 'patch') {
           try {
-            const result = applyPatch(conversation, msg.patch as Operation[], true, true);
-            conversation = result.newDocument;
+            conversation = applyStoredPatch(conversation, msg.patch);
             changed = true;
           } catch (error) {
             const first = (msg.patch as Array<{ op?: string; path?: string }>)[0];
@@ -323,8 +331,7 @@ export class MsgStore {
       const msg = this.messages[i];
       if (msg.type === 'patch') {
         try {
-          const result = applyPatch(conversation, msg.patch as Operation[], true, true);
-          conversation = result.newDocument;
+          conversation = applyStoredPatch(conversation, msg.patch);
         } catch (error) {
           const first = (msg.patch as Array<{ op?: string; path?: string }>)[0];
           console.warn(

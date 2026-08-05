@@ -96,6 +96,39 @@ describe('MsgStore: streaming dedup', () => {
     const snap = store.getSnapshot()
     expect(snap.entries[idx].content).toBe('final')
   })
+
+  it('keeps root entries replacement immutable across cache rebuilds', () => {
+    const store = new MsgStore()
+    const initialEntry = createAssistantMessage('history')
+    const liveEntry = createAssistantMessage('live')
+    const rootReplacement = [{
+      op: 'replace' as const,
+      path: '/entries',
+      value: [initialEntry],
+    }]
+
+    store.pushPatch(rootReplacement)
+    expect(store.getSnapshot().entries.map(entry => entry.id)).toEqual([initialEntry.id])
+
+    store.pushPatch(addNormalizedEntry(1, liveEntry))
+    expect(store.getSnapshot().entries.map(entry => entry.id)).toEqual([
+      initialEntry.id,
+      liveEntry.id,
+    ])
+
+    // The second same-path replace invalidates the cache and forces a full replay.
+    store.pushPatch(updateEntryContent(1, 'live partial'))
+    store.getSnapshot()
+    store.pushPatch(updateEntryContent(1, 'live final'))
+
+    const snapshot = store.getSnapshot()
+    expect(snapshot.entries.map(entry => entry.id)).toEqual([
+      initialEntry.id,
+      liveEntry.id,
+    ])
+    expect(snapshot.entries[1].content).toBe('live final')
+    expect(rootReplacement[0].value).toEqual([initialEntry])
+  })
 })
 
 describe('MsgStore: FIFO eviction folds into baseSnapshot', () => {
