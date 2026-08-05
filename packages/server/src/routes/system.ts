@@ -102,7 +102,7 @@ export async function systemRoutes(app: FastifyInstance) {
     return buildMcpConfigResponse();
   });
 
-  // MCP 上下文检测：优先根据 sessionId 精确定位，fallback 到 cwd 路径匹配活跃工作空间。
+  // MCP 上下文检测：托管 Agent 使用 credential 绑定身份，手动 MCP 才回退到 query/cwd 推断。
   app.get('/system/workspace-context', async (request, reply) => {
     const { path: cwdPath, sessionId } = request.query as { path?: string; sessionId?: string };
     if (!cwdPath) {
@@ -110,15 +110,18 @@ export async function systemRoutes(app: FastifyInstance) {
       return { error: 'path query parameter is required' };
     }
 
-    const workspaceFromSession = sessionId
+    const agentIdentity = request.agentTowerAgentIdentity;
+    const effectiveSessionId = agentIdentity?.sessionId ?? sessionId;
+    const workspaceFromSession = effectiveSessionId
       ? await prisma.session.findUnique({
-          where: { id: sessionId },
+          where: { id: effectiveSessionId },
           include: { workspace: { include: { task: { include: { project: true } } } } },
         })
       : null;
 
-    const workspace = workspaceFromSession?.workspace
-      ?? await prisma.workspace.findFirst({
+    let workspace = workspaceFromSession?.workspace ?? null;
+    if (!workspace && !agentIdentity) {
+      workspace = await prisma.workspace.findFirst({
         where: {
           status: 'ACTIVE',
           OR: [
@@ -129,6 +132,7 @@ export async function systemRoutes(app: FastifyInstance) {
         include: { task: { include: { project: true } } },
         orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
       });
+    }
 
     if (!workspace) {
       reply.code(404);
@@ -144,9 +148,32 @@ export async function systemRoutes(app: FastifyInstance) {
       workspaceBranch: workspace.branchName,
       workspaceKind: workspace.workspaceKind,
       workingDir: workspace.workingDir || workspace.worktreePath,
-      ...await resolveTeamRunContext(workspace.id, sessionId),
+      ...(agentIdentity
+        ? await resolveBoundTeamRunContext(workspace.id, agentIdentity)
+        : await resolveTeamRunContext(workspace.id, sessionId)),
     };
   });
+}
+
+async function resolveBoundTeamRunContext(workspaceId: string, identity: {
+  sessionId: string;
+  invocationId: string | null;
+}): Promise<{
+  teamRunId?: string;
+  memberId?: string;
+  invocationId?: string;
+}> {
+  if (!identity.invocationId) return {};
+
+  const invocation = await prisma.agentInvocation.findFirst({
+    where: {
+      id: identity.invocationId,
+      workspaceId,
+      sessionId: identity.sessionId,
+    },
+    select: { id: true, teamRunId: true, memberId: true },
+  });
+  return invocation ? toTeamRunContext(invocation) : {};
 }
 
 async function resolveTeamRunContext(workspaceId: string, sessionId?: string): Promise<{
@@ -160,11 +187,7 @@ async function resolveTeamRunContext(workspaceId: string, sessionId?: string): P
       select: { id: true, teamRunId: true, memberId: true },
     });
     if (invocation) {
-      return {
-        teamRunId: invocation.teamRunId,
-        memberId: invocation.memberId,
-        invocationId: invocation.id,
-      };
+      return toTeamRunContext(invocation);
     }
   }
 
@@ -182,7 +205,18 @@ async function resolveTeamRunContext(workspaceId: string, sessionId?: string): P
     return {};
   }
 
-  const invocation = runningInvocations[0]!;
+  return toTeamRunContext(runningInvocations[0]!);
+}
+
+function toTeamRunContext(invocation: {
+  id: string;
+  teamRunId: string;
+  memberId: string;
+}): {
+  teamRunId: string;
+  memberId: string;
+  invocationId: string;
+} {
   return {
     teamRunId: invocation.teamRunId,
     memberId: invocation.memberId,
