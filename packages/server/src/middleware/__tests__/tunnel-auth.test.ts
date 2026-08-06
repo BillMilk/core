@@ -58,6 +58,24 @@ describe('tunnelAuthHook', () => {
     await app.close();
   });
 
+  it('allows versioned favicon requests without tunnel authentication', async () => {
+    const app = Fastify();
+    await app.register(fastifyCookie);
+    app.addHook('onRequest', tunnelAuthHook);
+    app.get('/favicon.ico', async () => 'icon');
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/favicon.ico?v=20260720',
+      headers: { 'cf-ray': 'abc123' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe('icon');
+
+    await app.close();
+  });
+
   it('bootstraps a tunnel session from a non-document request without redirecting', async () => {
     const app = Fastify();
     await app.register(fastifyCookie);

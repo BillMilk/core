@@ -49,7 +49,8 @@ export async function tunnelAuthHook(
 
   // 静态资源不需要认证（构建产物，不含敏感数据）
   const url = request.url;
-  if (url.startsWith('/assets/') || url === '/vite.svg' || url === '/favicon.ico') return;
+  const pathname = new URL(url, 'http://localhost').pathname;
+  if (pathname.startsWith('/assets/') || pathname === '/vite.svg' || pathname === '/favicon.ico') return;
 
   if (url.startsWith('/api/tunnel/health')) return;
 
