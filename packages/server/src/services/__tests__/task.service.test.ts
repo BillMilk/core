@@ -46,6 +46,22 @@ let SessionManagerClass: typeof import('../session-manager.js').SessionManager;
 let EventBus: typeof import('../../core/event-bus.js').EventBus;
 let prisma: PrismaClient;
 
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xDC00 || next > 0xDFFF) {
+        return true;
+      }
+      index += 1;
+    } else if (code >= 0xDC00 && code <= 0xDFFF) {
+      return true;
+    }
+  }
+  return false;
+}
+
 describe('TaskService', () => {
   beforeAll(async () => {
     execFileSync(
@@ -149,7 +165,7 @@ describe('TaskService', () => {
     expect(task.project?.isGitRepo).toBe(false);
   });
 
-  it('splits long single-input task content into a short title and full description', async () => {
+  it('splits multiline task content into a title and the unconsumed body', async () => {
     const service = new TaskService(new EventBus(), {} as SessionManager);
     const project = await prisma.project.create({
       data: {
@@ -157,17 +173,103 @@ describe('TaskService', () => {
         repoPath: testDir,
       },
     });
-    const longInput = [
-      'Analyze production checkout failure logs',
+    const body = [
       'error='.repeat(200),
       'stack='.repeat(200),
+    ].join('\n');
+    const longInput = [
+      'Analyze production checkout failure logs',
+      body,
     ].join('\n');
 
     const task = await service.create(project.id, { title: longInput });
 
     expect(task.title).toBe('Analyze production checkout failure logs');
     expect(task.title.length).toBeLessThanOrEqual(200);
-    expect(task.description).toBe(longInput);
+    expect(task.description).toBe(body);
+    expect(`${task.title}\n${task.description}`).toBe(longInput);
+  });
+
+  it('preserves the unconsumed suffix of oversized single-line task content', async () => {
+    const service = new TaskService(new EventBus(), {} as SessionManager);
+    const project = await prisma.project.create({
+      data: {
+        name: 'Task oversized single-line project',
+        repoPath: testDir,
+      },
+    });
+    const longInput = 'x'.repeat(300);
+
+    const task = await service.create(project.id, { title: longInput });
+
+    expect(task.title).toBe(`${'x'.repeat(197)}...`);
+    expect(task.description).toBe('x'.repeat(103));
+    expect(`${task.title.slice(0, -3)}${task.description}`).toBe(longInput);
+  });
+
+  it('splits oversized emoji create input at complete Unicode code point boundaries', async () => {
+    const service = new TaskService(new EventBus(), {} as SessionManager);
+    const project = await prisma.project.create({
+      data: {
+        name: 'Task emoji create project',
+        repoPath: testDir,
+      },
+    });
+    const longInput = '😀'.repeat(150);
+
+    const task = await service.create(project.id, { title: longInput });
+
+    expect(task.title).toBe(`${'😀'.repeat(98)}...`);
+    expect(task.description).toBe('😀'.repeat(52));
+    expect(hasLoneSurrogate(task.title)).toBe(false);
+    expect(hasLoneSurrogate(task.description ?? '')).toBe(false);
+    expect(`${task.title.slice(0, -3)}${task.description}`).toBe(longInput);
+  });
+
+  it.each([
+    {
+      name: 'CRLF separator',
+      input: `CRLF title\r\n${'detail '.repeat(50)}`,
+      expectedTitle: 'CRLF title',
+      expectedBody: 'detail '.repeat(50),
+    },
+    {
+      name: 'leading body blank line',
+      input: `Blank line title\n\n${'detail '.repeat(50)}`,
+      expectedTitle: 'Blank line title',
+      expectedBody: `\n${'detail '.repeat(50)}`,
+    },
+    {
+      name: 'leading blank lines before the title',
+      input: `\r\n\r\nPrefaced title\r\n${'detail '.repeat(50)}`,
+      expectedTitle: 'Prefaced title',
+      expectedBody: 'detail '.repeat(50),
+    },
+    {
+      name: 'indented Markdown code block',
+      input: `Code block title\r\n    ${'code '.repeat(60)}`,
+      expectedTitle: 'Code block title',
+      expectedBody: `    ${'code '.repeat(60)}`,
+    },
+    {
+      name: 'first sentence extraction',
+      input: `Stop after this sentence. Continue with ${'details '.repeat(50)}`,
+      expectedTitle: 'Stop after this sentence.',
+      expectedBody: `Continue with ${'details '.repeat(50)}`,
+    },
+  ])('preserves the exact autosplit body for $name', async ({ input, expectedTitle, expectedBody }) => {
+    const service = new TaskService(new EventBus(), {} as SessionManager);
+    const project = await prisma.project.create({
+      data: {
+        name: `Task whitespace project ${expectedTitle}`,
+        repoPath: testDir,
+      },
+    });
+
+    const task = await service.create(project.id, { title: input });
+
+    expect(task.title).toBe(expectedTitle);
+    expect(task.description).toBe(expectedBody);
   });
 
   it('preserves existing description content when splitting long task input', async () => {
@@ -178,7 +280,8 @@ describe('TaskService', () => {
         repoPath: testDir,
       },
     });
-    const longInput = `Investigate logs\n${'line '.repeat(300)}`;
+    const body = 'line '.repeat(300);
+    const longInput = `Investigate logs\n${body}`;
     const attachmentDescription = 'Attachments:\n[log.txt](/attachments/log.txt)';
 
     const task = await service.create(project.id, {
@@ -187,8 +290,8 @@ describe('TaskService', () => {
     });
 
     expect(task.title).toBe('Investigate logs');
-    expect(task.description).toContain(longInput);
-    expect(task.description).toContain(attachmentDescription);
+    expect(task.description).toBe(`${body}\n\n${attachmentDescription}`);
+    expect(task.description).not.toContain('Investigate logs');
   });
 
   it('keeps existing description when updating a task with long single-input content', async () => {
@@ -213,6 +316,25 @@ describe('TaskService', () => {
     expect(updated.title).toBe('New incident analysis');
     expect(updated.description).toContain(longInput);
     expect(updated.description).toContain('Original description');
+  });
+
+  it('preserves independently supplied short titles and descriptions on create', async () => {
+    const service = new TaskService(new EventBus(), {} as SessionManager);
+    const project = await prisma.project.create({
+      data: {
+        name: 'Task independent fields project',
+        repoPath: testDir,
+      },
+    });
+
+    const task = await service.create(project.id, {
+      title: 'External task title',
+      description: 'Independent task description',
+    });
+    expect(task).toMatchObject({
+      title: 'External task title',
+      description: 'Independent task description',
+    });
   });
 
   it('returns preview-only task lists for historical oversized titles and descriptions', async () => {

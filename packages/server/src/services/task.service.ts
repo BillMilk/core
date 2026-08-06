@@ -102,6 +102,41 @@ function truncateWithEllipsis(value: string, maxLength: number): string {
   return `${candidate.trimEnd()}...`;
 }
 
+function sliceAtCompleteCodePointBoundary(value: string, maxLength: number): string {
+  let end = 0;
+  for (const character of value) {
+    if (end + character.length > maxLength) {
+      break;
+    }
+    end += character.length;
+  }
+  return value.slice(0, end);
+}
+
+function truncateWithEllipsisDetails(value: string, maxLength: number): {
+  value: string;
+  consumedLength: number;
+} {
+  if (value.length <= maxLength) {
+    return { value, consumedLength: value.length };
+  }
+
+  const limit = Math.max(1, maxLength - 3);
+  const sliced = sliceAtCompleteCodePointBoundary(value, limit);
+  const boundary = Math.max(
+    sliced.lastIndexOf(' '),
+    sliced.lastIndexOf('，'),
+    sliced.lastIndexOf('。'),
+    sliced.lastIndexOf(','),
+    sliced.lastIndexOf('.')
+  );
+  const candidate = (boundary >= Math.floor(limit * 0.6) ? sliced.slice(0, boundary) : sliced).trimEnd();
+  return {
+    value: `${candidate}...`,
+    consumedLength: candidate.length,
+  };
+}
+
 function normalizeTaskTitle(title: string): string {
   const normalized = compactWhitespace(title);
   if (normalized.length === 0) {
@@ -140,6 +175,94 @@ function mergeDescriptionParts(parts: Array<string | null | undefined>): string 
   return merged.length > 0 ? merged.join('\n\n') : undefined;
 }
 
+function compactWhitespaceWithSourceOffsets(value: string): {
+  value: string;
+  sourceEndOffsets: number[];
+} {
+  let compacted = '';
+  let sourceOffset = 0;
+  let pendingWhitespaceEnd = 0;
+  let hasPendingWhitespace = false;
+  const sourceEndOffsets: number[] = [];
+
+  for (const character of value) {
+    sourceOffset += character.length;
+    if (/\s/u.test(character)) {
+      if (compacted.length > 0) {
+        hasPendingWhitespace = true;
+        pendingWhitespaceEnd = sourceOffset;
+      }
+      continue;
+    }
+
+    if (hasPendingWhitespace) {
+      compacted += ' ';
+      sourceEndOffsets.push(pendingWhitespaceEnd);
+      hasPendingWhitespace = false;
+    }
+    compacted += character;
+    for (let index = 0; index < character.length; index += 1) {
+      sourceEndOffsets.push(sourceOffset);
+    }
+  }
+
+  return { value: compacted, sourceEndOffsets };
+}
+
+function getTitleSeparatorLength(remainder: string): number {
+  const lineSeparator = remainder.match(/^[ \t]*(?:\r\n|\r|\n)/u);
+  if (lineSeparator) {
+    return lineSeparator[0].length;
+  }
+  return /^[ \t]/u.test(remainder) ? 1 : 0;
+}
+
+function deriveTaskTitleBodySplit(rawBody: string): {
+  title: string;
+  consumedEnd: number;
+  body: string;
+} {
+  const linePattern = /[^\r\n]+/g;
+  let lineMatch: RegExpExecArray | null;
+
+  while ((lineMatch = linePattern.exec(rawBody)) !== null) {
+    const compactedLine = compactWhitespaceWithSourceOffsets(lineMatch[0]);
+    if (compactedLine.value.length === 0) {
+      continue;
+    }
+
+    const sentenceMatch = compactedLine.value.match(/^(.+?[。！？.!?])(?:\s|$)/u);
+    const candidate = sentenceMatch?.[1] ?? compactedLine.value;
+    const normalizedTitle = truncateWithEllipsisDetails(candidate, TASK_TITLE_MAX_LENGTH);
+    const consumedLineEnd = compactedLine.sourceEndOffsets[normalizedTitle.consumedLength - 1] ?? 0;
+    const rawConsumedEnd = lineMatch.index + consumedLineEnd;
+    const remainder = rawBody.slice(rawConsumedEnd);
+    const separatorLength = getTitleSeparatorLength(remainder);
+    const consumedEnd = rawConsumedEnd + separatorLength;
+
+    return {
+      title: normalizedTitle.value,
+      consumedEnd,
+      body: rawBody.slice(consumedEnd),
+    };
+  }
+
+  throw new ValidationError('Task title is required');
+}
+
+function mergeAutosplitDescription(
+  body: string,
+  description: string | null | undefined
+): string | undefined {
+  if (body.length === 0) {
+    return description ?? undefined;
+  }
+  if (!description?.trim()) {
+    return body;
+  }
+  return `${body}\n\n${description}`;
+}
+
 function normalizeCreateTaskInput(input: CreateTaskInput): Required<Pick<CreateTaskInput, 'title'>> & Pick<CreateTaskInput, 'description' | 'priority'> {
   const rawTitle = input.title;
   const compactTitle = compactWhitespace(rawTitle);
@@ -155,9 +278,10 @@ function normalizeCreateTaskInput(input: CreateTaskInput): Required<Pick<CreateT
     };
   }
 
+  const split = deriveTaskTitleBodySplit(rawTitle);
   return {
-    title: deriveTitleFromBody(rawTitle),
-    description: mergeDescriptionParts([rawTitle, input.description]),
+    title: split.title,
+    description: mergeAutosplitDescription(split.body, input.description),
     priority: input.priority,
   };
 }

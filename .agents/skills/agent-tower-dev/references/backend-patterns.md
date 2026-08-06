@@ -31,6 +31,8 @@ SQLite 在 `buildApp()` 注册路由前统一启用 WAL/busy timeout，并执行
 
 Task 看板热路径使用 `GET /api/task-board` 的紧凑 DTO，固定批量查询 task、首选 workspace 和 latest session；完整 description、workspace/session 历史按详情接口读取。不要在列表 mapper 中加载完整关系、正文或按 project/task 循环查询。
 
+Task 创建边界对超长单一 `title` 输入做确定性拆分：`TaskService` 按完整 Unicode code point 边界从原文一次派生展示 title、已消费范围和保留原始空白的剩余 body，再将 body 放在独立传入的 description 之前。该不变量只约束创建，不改变既有 update 契约，也不回写历史 Task 或 RoomMessage。普通的独立 title/description 保持各自语义；TeamRun 首条消息、WorkRequest instruction 和 Agent prompt 统一拼接 `title + description`，只用 trim 判断 description 是否为空，实际内容保留 description 原始空白，不得通过比较文本内容猜测是否来自 autosplit。
+
 Project 的 Git capability 是持久化读模型。Project/Task/board 列表只读保存值，不运行 `git rev-parse`；创建、恢复、显式 refresh，以及 Worktree/TeamRun 这类危险操作前才实时探测并回写。旧库 null capability 可以做廉价 `.git` fallback，但不能在列表请求启动 Git 子进程。
 
 Project 列表的 `lastActivityAt` 是后端聚合读模型：取最近一条未删除 Task 的 `createdAt`，无任务时回退 Project `createdAt`；Task 后续更新不推进该时间。项目选择器必须使用该字段排序，不要从受筛选和分页限制的 task board 在前端反推。

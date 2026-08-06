@@ -253,14 +253,15 @@ describe('task routes', () => {
     }
   });
 
-  it('accepts long single-input task content and stores it as title plus description', async () => {
+  it('accepts long single-input task content and stores the unconsumed body as description', async () => {
     const project = await prisma.project.create({
       data: {
         name: 'Task route long input project',
         repoPath: testDir,
       },
     });
-    const longInput = `Analyze API logs\n${'request failed '.repeat(300)}`;
+    const body = 'request failed '.repeat(300);
+    const longInput = `Analyze API logs\n${body}`;
     const app = await buildTestApp();
 
     try {
@@ -275,11 +276,11 @@ describe('task routes', () => {
       expect(response.statusCode).toBe(201);
       expect(response.json()).toMatchObject({
         title: 'Analyze API logs',
-        description: longInput,
+        description: body,
       });
       const stored = await prisma.task.findFirstOrThrow({ where: { projectId: project.id } });
       expect(stored.title).toBe('Analyze API logs');
-      expect(stored.description).toBe(longInput);
+      expect(stored.description).toBe(body);
     } finally {
       await app.close();
     }

@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@prisma/client';
 import type { CreateMemberPresetInput } from '../team-run.service.js';
+import type { EventBus } from '../../core/event-bus.js';
+import type { SessionManager } from '../session-manager.js';
 
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-tower-team-run-'));
 const dbPath = path.join(testDir, 'test.db');
@@ -38,6 +40,7 @@ const serverRoot = path.resolve(__dirname, '../../..');
 const schemaPath = path.join(serverRoot, 'prisma/schema.prisma');
 
 let TeamRunService: typeof import('../team-run.service.js').TeamRunService;
+let TaskService: typeof import('../task.service.js').TaskService;
 let prisma: PrismaClient;
 type TeamRunServiceInstance = InstanceType<typeof import('../team-run.service.js').TeamRunService>;
 let gitRepoCounter = 0;
@@ -120,8 +123,10 @@ describe('TeamRunService', () => {
     );
 
     const serviceModule = await import('../team-run.service.js');
+    const taskServiceModule = await import('../task.service.js');
     const utilsModule = await import('../../utils/index.js');
     TeamRunService = serviceModule.TeamRunService;
+    TaskService = taskServiceModule.TaskService;
     prisma = utilsModule.prisma;
   });
 
@@ -497,7 +502,109 @@ describe('TeamRunService', () => {
     });
   });
 
-  it('creates initial TeamRun messages and WorkRequests with the full task description', async () => {
+  it('stores an autosplit task title only once in the initial RoomMessage and WorkRequest', async () => {
+    const preset = await service.createMemberPreset(userMessagesPresetInput('Leader'));
+    const project = await prisma.project.create({
+      data: {
+        name: 'Initial autosplit project',
+        repoPath: createGitRepoPath('initial-autosplit-project'),
+      },
+    });
+    const body = 'diagnostic-line '.repeat(300);
+    const longInput = `Investigate checkout logs\n${body}`;
+    const taskService = new TaskService(
+      fakeEventBus as unknown as EventBus,
+      {} as SessionManager,
+    );
+    const task = await taskService.create(project.id, { title: longInput });
+
+    expect(task).toMatchObject({
+      title: 'Investigate checkout logs',
+      description: body,
+    });
+
+    const teamRun = await service.createTeamRunWithInitialRoomMessage(task.id, {
+      mode: 'CONFIRM',
+      memberPresetIds: [preset.id],
+    });
+    const expectedContent = `Investigate checkout logs\n\n${body}`;
+    const storedMessage = await prisma.roomMessage.findFirstOrThrow({ where: { teamRunId: teamRun.id } });
+    const storedRequest = await prisma.workRequest.findFirstOrThrow({ where: { teamRunId: teamRun.id } });
+
+    expect(storedMessage.content).toBe(expectedContent);
+    expect(storedRequest.instruction).toBe(expectedContent);
+    expect(storedMessage.content.match(/Investigate checkout logs/g)).toHaveLength(1);
+    expect(storedRequest.instruction.match(/Investigate checkout logs/g)).toHaveLength(1);
+  });
+
+  it('preserves CRLF, blank lines, and Markdown indentation in the initial content', async () => {
+    const preset = await service.createMemberPreset(userMessagesPresetInput('Leader'));
+    const project = await prisma.project.create({
+      data: {
+        name: 'Initial formatted autosplit project',
+        repoPath: createGitRepoPath('initial-formatted-autosplit-project'),
+      },
+    });
+    const body = `\r\n    ${'command --flag '.repeat(30)}\r\n\r\n    next-command`;
+    const taskService = new TaskService(
+      fakeEventBus as unknown as EventBus,
+      {} as SessionManager,
+    );
+    const task = await taskService.create(project.id, {
+      title: `Preserve formatted details\r\n${body}`,
+    });
+
+    expect(task).toMatchObject({
+      title: 'Preserve formatted details',
+      description: body,
+    });
+
+    const teamRun = await service.createTeamRunWithInitialRoomMessage(task.id, {
+      mode: 'CONFIRM',
+      memberPresetIds: [preset.id],
+    });
+    const expectedContent = `Preserve formatted details\n\n${body}`;
+    const storedMessage = await prisma.roomMessage.findFirstOrThrow({ where: { teamRunId: teamRun.id } });
+    const storedRequest = await prisma.workRequest.findFirstOrThrow({ where: { teamRunId: teamRun.id } });
+
+    expect(storedMessage.content).toBe(expectedContent);
+    expect(storedRequest.instruction).toBe(expectedContent);
+  });
+
+  it('preserves complete emoji code points in the initial RoomMessage and WorkRequest', async () => {
+    const preset = await service.createMemberPreset(userMessagesPresetInput('Leader'));
+    const project = await prisma.project.create({
+      data: {
+        name: 'Initial emoji autosplit project',
+        repoPath: createGitRepoPath('initial-emoji-autosplit-project'),
+      },
+    });
+    const longInput = '😀'.repeat(150);
+    const expectedTitle = `${'😀'.repeat(98)}...`;
+    const expectedBody = '😀'.repeat(52);
+    const taskService = new TaskService(
+      fakeEventBus as unknown as EventBus,
+      {} as SessionManager,
+    );
+    const task = await taskService.create(project.id, { title: longInput });
+
+    expect(task.title).toBe(expectedTitle);
+    expect(task.description).toBe(expectedBody);
+    expect(`${task.title.slice(0, -3)}${task.description}`).toBe(longInput);
+
+    const teamRun = await service.createTeamRunWithInitialRoomMessage(task.id, {
+      mode: 'CONFIRM',
+      memberPresetIds: [preset.id],
+    });
+    const expectedContent = `${expectedTitle}\n\n${expectedBody}`;
+    const storedMessage = await prisma.roomMessage.findFirstOrThrow({ where: { teamRunId: teamRun.id } });
+    const storedRequest = await prisma.workRequest.findFirstOrThrow({ where: { teamRunId: teamRun.id } });
+
+    expect(storedMessage.content).toBe(expectedContent);
+    expect(storedRequest.instruction).toBe(expectedContent);
+  });
+
+  it('creates initial TeamRun messages and WorkRequests with independent title and description content', async () => {
     const preset = await service.createMemberPreset(userMessagesPresetInput('Leader'));
     const project = await prisma.project.create({
       data: {
@@ -525,10 +632,10 @@ describe('TeamRunService', () => {
     // 标题仍截断，但任务描述完整写入首条消息与 WorkRequest（不再退化成预览）
     const storedMessage = await prisma.roomMessage.findFirstOrThrow({ where: { teamRunId: teamRun.id } });
     const storedRequest = await prisma.workRequest.findFirstOrThrow({ where: { teamRunId: teamRun.id } });
-    expect(storedMessage.content).toContain('Investigate checkout logs');
-    expect(storedMessage.content).toContain('line '.repeat(100));
+    const expectedContent = `Investigate checkout logs\n\n${longDescription}`;
+    expect(storedMessage.content).toBe(expectedContent);
     expect(storedMessage.content).not.toContain('Full details are stored on the task description');
-    expect(storedRequest.instruction).toContain('line '.repeat(100));
+    expect(storedRequest.instruction).toBe(expectedContent);
 
     // 列表仍返回截断预览，按消息 id 取详情可拿到完整内容
     const listed = await service.listRoomMessages(teamRun.id);
