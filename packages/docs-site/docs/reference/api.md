@@ -59,7 +59,7 @@ description: 当前代码库中公开的主要 REST 端点。
 | `GET` | `/api/tasks/:taskId/workspaces` | 获取任务下所有 workspace |
 | `GET` | `/api/workspaces/:id` | 获取 workspace 详情 |
 | `GET` | `/api/workspaces/:id/diff` | 获取 workspace diff |
-| `POST` | `/api/workspaces/:id/merge` | squash merge |
+| `POST` | `/api/workspaces/:id/merge` | squash merge；可用 `stopActiveServices: true` 明确允许先停止源 workspace 的活跃后台服务 |
 | `POST` | `/api/workspaces/:id/archive` | 归档 workspace |
 | `DELETE` | `/api/workspaces/:id` | 删除 workspace |
 | `POST` | `/api/workspaces/:id/open-editor` | 在 IDE 中打开 workspace |
@@ -70,7 +70,7 @@ description: 当前代码库中公开的主要 REST 端点。
 | `POST` | `/api/system/cleanup` | 清理可清理的 workspace |
 | `POST` | `/api/system/hibernate-idle` | 手动触发空闲 workspace 休眠 |
 
-Merge readiness 和实际 merge 锁内都会检查后台服务；候选 workspace 存在 `STARTING`、`RUNNING`、`STOPPING` 服务，或任意状态仍保留 runtime identity 时，以 `409 WORKSPACE_HAS_ACTIVE_SERVICE` 阻止合并。
+Merge readiness 和实际 merge 锁内都会检查后台服务；候选 workspace 存在 `STARTING`、`RUNNING`、`STOPPING` 服务，或任意状态仍保留 runtime identity 时，默认以 `409 WORKSPACE_HAS_ACTIVE_SERVICE` 阻止合并。用户明确确认后，merge 请求可携带 `stopActiveServices: true`，服务端会在 workspace lifecycle barrier 和 merge target lock 内先停止这些服务，再重新检查并执行合并；停止后的服务不会自动恢复。
 
 ### Workspace 后台服务
 

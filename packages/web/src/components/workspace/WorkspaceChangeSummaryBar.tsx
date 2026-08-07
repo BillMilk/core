@@ -3,8 +3,13 @@ import { AlertTriangle, ChevronRight, GitGraph, Loader2, RefreshCw, Upload } fro
 import type { GitOperationStatus } from '@agent-tower/shared'
 import { useAbortOperation, useMergeWorkspace, useRebaseWorkspace } from '@/hooks/use-workspaces'
 import type { GitChangesResponse } from '@/hooks/use-git'
+import { useWorkspaceBackgroundServices } from '@/hooks/use-workspace-services'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
+import {
+  isMergeBlockingWorkspaceService,
+  isWorkspaceServiceMergeError,
+} from '@/lib/workspace-merge'
 import { SubmitChangesDialog } from './SubmitChangesDialog'
 import { getConflictDetails, type ConflictDetails } from './GitOperationsDialog'
 
@@ -69,6 +74,8 @@ export function WorkspaceChangeSummaryBar({
   const abortOperation = useAbortOperation()
   const [isSubmitDialogOpen, setIsSubmitDialogOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const servicesQuery = useWorkspaceBackgroundServices(workspaceId, isSubmitDialogOpen)
+  const activeServices = (servicesQuery.data ?? []).filter(isMergeBlockingWorkspaceService)
 
   const totals = useMemo(() => getChangeTotals(changes), [changes])
   const changedLines = totals.additions + totals.deletions
@@ -138,11 +145,15 @@ export function WorkspaceChangeSummaryBar({
     setIsSubmitDialogOpen(true)
   }
 
-  const handleSubmitConfirm = (finalMessage: string | undefined) => {
+  const handleSubmitConfirm = (finalMessage: string | undefined, stopActiveServices: boolean) => {
     setError(null)
-    mergeWorkspace.mutate({ id: workspaceId, commitMessage: finalMessage }, {
+    mergeWorkspace.mutate({ id: workspaceId, commitMessage: finalMessage, stopActiveServices }, {
       onSuccess: () => setIsSubmitDialogOpen(false),
       onError: (err: unknown) => {
+        if (isWorkspaceServiceMergeError(err)) {
+          setError(t('后台服务仍在运行，请确认停止服务后再提交。'))
+          return
+        }
         handleMutationError(err, t('提交失败，请稍后重试'), (details) => {
           setIsSubmitDialogOpen(false)
           onConflict(details)
@@ -236,6 +247,9 @@ export function WorkspaceChangeSummaryBar({
         targetBranch={targetBranch}
         commitMessage={commitMessage}
         isPending={mergeWorkspace.isPending}
+        activeServices={activeServices}
+        isCheckingServices={servicesQuery.isLoading}
+        serviceCheckFailed={servicesQuery.isError}
         error={error}
         onConfirm={handleSubmitConfirm}
       />

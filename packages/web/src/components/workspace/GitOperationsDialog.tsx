@@ -1,10 +1,20 @@
 import { useState, useEffect } from 'react'
 import { GitBranch, GitMerge, AlertTriangle, CheckCircle, ArrowRight, Loader2, FileWarning } from 'lucide-react'
-import { ConflictOp, type GitOperationStatus } from '@agent-tower/shared'
+import {
+  ConflictOp,
+  type GitOperationStatus,
+  type WorkspaceBackgroundServiceDto,
+} from '@agent-tower/shared'
 import { Modal } from '@/components/ui/modal'
 import { useRebaseWorkspace, useMergeWorkspace, useGitStatus } from '@/hooks/use-workspaces'
+import { useWorkspaceBackgroundServices } from '@/hooks/use-workspace-services'
 import { useI18n } from '@/lib/i18n'
 import { ApiError } from '@/lib/api-client'
+import {
+  isMergeBlockingWorkspaceService,
+  isWorkspaceServiceMergeError,
+} from '@/lib/workspace-merge'
+import { MergeActiveServicesNotice } from './MergeActiveServicesNotice'
 
 interface GitOperationsDialogProps {
   open: boolean
@@ -184,6 +194,11 @@ export function GitOperationsDialog({
   const [mergeStep, setMergeStep] = useState<MergeStep>('select')
   const [editableMessage, setEditableMessage] = useState('')
   const [hasEditedMessage, setHasEditedMessage] = useState(false)
+  const servicesQuery = useWorkspaceBackgroundServices(
+    workspaceId,
+    open && mergeStep === 'confirm',
+  )
+  const activeServices = (servicesQuery.data ?? []).filter(isMergeBlockingWorkspaceService)
 
   const hasConflicts = gitStatus ? gitStatus.conflictedFiles.length > 0 : false
   const isOperationInProgress = gitStatus ? gitStatus.operation !== 'idle' : false
@@ -231,9 +246,17 @@ export function GitOperationsDialog({
   const handleMergeConfirm = () => {
     setError(null)
     const finalMessage = editableMessage.trim() || undefined
-    mergeWorkspace.mutate({ id: workspaceId, commitMessage: finalMessage }, {
+    mergeWorkspace.mutate({
+      id: workspaceId,
+      commitMessage: finalMessage,
+      stopActiveServices: activeServices.length > 0,
+    }, {
       onSuccess: () => onOpenChange(false),
       onError: (err: unknown) => {
+        if (isWorkspaceServiceMergeError(err)) {
+          setError(t('后台服务仍在运行，请确认停止服务后再提交。'))
+          return
+        }
         handleMutationError(err, t('合并失败'), (details) => {
           onOpenChange(false)
           onConflict(details)
@@ -261,6 +284,9 @@ export function GitOperationsDialog({
           setEditableMessage={handleEditableMessageChange}
           error={error}
           isPending={mergeWorkspace.isPending}
+          activeServices={activeServices}
+          isCheckingServices={servicesQuery.isLoading}
+          serviceCheckFailed={servicesQuery.isError}
           onConfirm={handleMergeConfirm}
           onBack={() => setMergeStep('select')}
           branchName={branchName}
@@ -353,12 +379,16 @@ function SelectOperationView({
 
 function MergeConfirmView({
   editableMessage, setEditableMessage,
-  error, isPending, onConfirm, onBack, branchName, targetBranch,
+  error, isPending, activeServices, isCheckingServices, serviceCheckFailed,
+  onConfirm, onBack, branchName, targetBranch,
 }: {
   editableMessage: string
   setEditableMessage: (v: string) => void
   error: string | null
   isPending: boolean
+  activeServices: WorkspaceBackgroundServiceDto[]
+  isCheckingServices: boolean
+  serviceCheckFailed: boolean
   onConfirm: () => void
   onBack: () => void
   branchName: string
@@ -393,6 +423,12 @@ function MergeConfirmView({
         )}
       </div>
 
+      <MergeActiveServicesNotice
+        services={activeServices}
+        isLoading={isCheckingServices}
+        isError={serviceCheckFailed}
+      />
+
       {error && (
         <div className="px-3 py-2 rounded-md bg-red-50 border border-red-200 text-sm text-red-700">
           {error}
@@ -410,18 +446,22 @@ function MergeConfirmView({
         </button>
         <button
           onClick={onConfirm}
-          disabled={isPending}
+          disabled={isPending || isCheckingServices}
           className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 transition-colors disabled:opacity-50"
         >
-          {isPending ? (
+          {isPending || isCheckingServices ? (
             <>
               <Loader2 size={14} className="animate-spin" />
-              {t('合并中...')}
+              {isCheckingServices
+                ? t('正在检查后台服务...')
+                : activeServices.length > 0
+                  ? t('正在停止服务并提交...')
+                  : t('合并中...')}
             </>
           ) : (
             <>
               <GitMerge size={14} />
-              {t('确认合并')}
+              {activeServices.length > 0 ? t('停止服务并提交') : t('确认合并')}
             </>
           )}
         </button>

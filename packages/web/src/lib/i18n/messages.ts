@@ -1054,6 +1054,15 @@ export const messages: Record<AppLocale, Record<string, string>> = {
     '提交失败，请稍后重试': 'Submit failed. Please try again later.',
     '正在提交...': 'Submitting...',
     '确认提交': 'Confirm Submit',
+    '正在检查后台服务...': 'Checking services...',
+    '无法检查后台服务状态，提交时会再次确认。':
+      'Background service status could not be checked. The server will verify it when submitting.',
+    '合并前将停止 {count} 个后台服务': '{count} background services will be stopped before merging',
+    '停止后不会自动恢复。': 'They will not restart automatically after being stopped.',
+    '停止服务并提交': 'Stop Services and Submit',
+    '正在停止服务并提交...': 'Stopping and submitting...',
+    '后台服务仍在运行，请确认停止服务后再提交。':
+      'Background services are still running. Confirm that they should be stopped before submitting.',
     '请描述本次修改的内容': 'Describe the changes in this submission',
     '建议以 feat、fix、docs、refactor、chore 开头，保持提交记录清晰。feat 新增功能，fix 修复问题，docs 文档更新，refactor 代码重构，chore 日常维护。':
       'Start with feat (new feature), fix (bug fix), docs (documentation), refactor (restructure), or chore (maintenance) to keep the history clean.',

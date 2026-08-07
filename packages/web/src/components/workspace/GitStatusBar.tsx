@@ -4,7 +4,12 @@ import {
   RefreshCw, Upload, XCircle, FileWarning, Info,
 } from 'lucide-react'
 import { useRebaseWorkspace, useMergeWorkspace, useAbortOperation, useGitStatus } from '@/hooks/use-workspaces'
+import { useWorkspaceBackgroundServices } from '@/hooks/use-workspace-services'
 import { useI18n } from '@/lib/i18n'
+import {
+  isMergeBlockingWorkspaceService,
+  isWorkspaceServiceMergeError,
+} from '@/lib/workspace-merge'
 import { SubmitChangesDialog } from './SubmitChangesDialog'
 import { getConflictDetails, type ConflictDetails } from './GitOperationsDialog'
 
@@ -51,6 +56,8 @@ export function GitStatusBar({
 
   const [isSubmitDialogOpen, setIsSubmitDialogOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const servicesQuery = useWorkspaceBackgroundServices(workspaceId, isSubmitDialogOpen)
+  const activeServices = (servicesQuery.data ?? []).filter(isMergeBlockingWorkspaceService)
 
   useEffect(() => {
     if (isSubmitDialogOpen) {
@@ -88,11 +95,15 @@ export function GitStatusBar({
     setIsSubmitDialogOpen(true)
   }
 
-  const handleSubmitConfirm = (finalMessage: string | undefined) => {
+  const handleSubmitConfirm = (finalMessage: string | undefined, stopActiveServices: boolean) => {
     setError(null)
-    mergeWorkspace.mutate({ id: workspaceId, commitMessage: finalMessage }, {
+    mergeWorkspace.mutate({ id: workspaceId, commitMessage: finalMessage, stopActiveServices }, {
       onSuccess: () => setIsSubmitDialogOpen(false),
       onError: (err: unknown) => {
+        if (isWorkspaceServiceMergeError(err)) {
+          setError(t('后台服务仍在运行，请确认停止服务后再提交。'))
+          return
+        }
         handleMutationError(err, t('提交失败，请稍后重试'), (details) => {
           setIsSubmitDialogOpen(false)
           onConflict(details)
@@ -234,6 +245,9 @@ export function GitStatusBar({
         targetBranch={targetBranch}
         commitMessage={commitMessage}
         isPending={mergeWorkspace.isPending}
+        activeServices={activeServices}
+        isCheckingServices={servicesQuery.isLoading}
+        serviceCheckFailed={servicesQuery.isError}
         error={error}
         onConfirm={handleSubmitConfirm}
       />

@@ -97,6 +97,7 @@ export interface CreateWorkspaceOptions {
 
 export interface MergeWorkspaceOptions {
   commitMessage?: string;
+  stopActiveServices?: boolean;
   lockOwnerId?: string;
   requesterMemberId?: string;
   invocationId?: string;
@@ -1978,7 +1979,9 @@ export class WorkspaceService {
       }
       ensureProjectIsMutable(workspace.task.project, 'merge workspaces');
       this.assertWorktreeWorkspace(workspace);
-      await this.assertNoActiveBackgroundServices(workspace.id);
+      if (!options.stopActiveServices) {
+        await this.assertNoActiveBackgroundServices(workspace.id);
+      }
 
       return this.withMergeTargetLock(
         this.getMergeLockTarget(workspace),
@@ -2008,17 +2011,21 @@ export class WorkspaceService {
       );
     }
 
-    // The preflight/readiness result can become stale while waiting for the
-    // merge target lock, so the process-writing invariant is checked again.
-    await this.assertNoActiveBackgroundServices(workspace.id);
-
+    let parentWorkspace: WorkspaceWithTaskProject | null = null;
     if (workspace.parentWorkspaceId) {
       if (this.isTeamRunDedicatedChildWorkspace(workspace)) {
         await this.assertTeamRunChildMergeGate(workspace, options);
       }
-      return this.mergeChildIntoParent(workspace, options.commitMessage);
+      parentWorkspace = await this.getChildMergeTarget(workspace);
+    } else {
+      await this.assertTeamRunFinalMergeAllowed(workspace);
     }
 
+    await this.prepareBackgroundServicesForMerge(workspace.id, options.stopActiveServices === true);
+
+    if (parentWorkspace) {
+      return this.mergeChildIntoParent(workspace, parentWorkspace, options.commitMessage);
+    }
     return this.mergeRootWorkspaceToMain(workspace, options.commitMessage);
   }
 
@@ -2153,7 +2160,7 @@ export class WorkspaceService {
     }
   }
 
-  private async mergeChildIntoParent(workspace: MergeWorkspaceRecord, commitMessage?: string): Promise<string> {
+  private async getChildMergeTarget(workspace: MergeWorkspaceRecord): Promise<WorkspaceWithTaskProject> {
     this.assertWorktreeWorkspace(workspace);
 
     const parentWorkspace = await prisma.workspace.findUnique({
@@ -2180,6 +2187,16 @@ export class WorkspaceService {
     this.assertWorktreeWorkspace(parentWorkspace);
 
     await this.assertNoActiveWriteSessions(parentWorkspace.id);
+    return parentWorkspace;
+  }
+
+  private async mergeChildIntoParent(
+    workspace: MergeWorkspaceRecord,
+    parentWorkspace: WorkspaceWithTaskProject,
+    commitMessage?: string
+  ): Promise<string> {
+    this.assertWorktreeWorkspace(workspace);
+    this.assertWorktreeWorkspace(parentWorkspace);
 
     const worktreeManager = new WorktreeManager(workspace.task.project.repoPath);
     let sha: string;
@@ -2210,8 +2227,6 @@ export class WorkspaceService {
 
   private async mergeRootWorkspaceToMain(workspace: MergeWorkspaceRecord, commitMessage?: string): Promise<string> {
     this.assertWorktreeWorkspace(workspace);
-
-    await this.assertTeamRunFinalMergeAllowed(workspace);
 
     const worktreeManager = new WorktreeManager(workspace.task.project.repoPath);
     let sha: string;
@@ -2317,6 +2332,28 @@ export class WorkspaceService {
         409,
       );
     }
+  }
+
+  private async prepareBackgroundServicesForMerge(
+    workspaceId: string,
+    stopActiveServices: boolean
+  ): Promise<void> {
+    const activeService = await prisma.workspaceBackgroundService.findFirst({
+      where: {
+        workspaceId,
+        ...activeBackgroundServiceWhere,
+      },
+      select: { id: true },
+    });
+    if (!activeService) return;
+
+    if (!stopActiveServices) {
+      await this.assertNoActiveBackgroundServices(workspaceId);
+      return;
+    }
+
+    await this.backgroundService.stopAllForWorkspace(workspaceId);
+    await this.assertNoActiveBackgroundServices(workspaceId);
   }
 
   private getMergeLockTarget(workspace: MergeWorkspaceRecord): MergeLockTarget {

@@ -222,6 +222,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
   const mergeSchema = z.object({
     commitMessage: z.string().min(1).optional(),
+    stopActiveServices: z.boolean().optional(),
   });
 
   app.post<{ Params: { id: string } }>(
@@ -232,6 +233,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
       const identity = await workspaceService.resolveInvocationMemberForWorkspace(request.params.id, invocationId);
       const sha = await workspaceService.merge(request.params.id, {
         commitMessage: body.commitMessage,
+        stopActiveServices: body.stopActiveServices,
         lockOwnerId: invocationId,
         invocationId,
         requesterMemberId: identity?.memberId,

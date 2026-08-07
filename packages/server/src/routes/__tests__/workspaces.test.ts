@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@prisma/client';
 import { WorkspaceKind } from '../../types/index.js';
 
@@ -19,6 +19,7 @@ const schemaPath = path.join(serverRoot, 'prisma/schema.prisma');
 
 let prisma: PrismaClient;
 let workspaceRoutes: typeof import('../workspaces.js').workspaceRoutes;
+let WorkspaceService: typeof import('../../services/workspace.service.js').WorkspaceService;
 
 async function buildTestApp() {
   const app = Fastify();
@@ -39,8 +40,10 @@ describe('workspace routes', () => {
     );
 
     const routeModule = await import('../workspaces.js');
+    const workspaceServiceModule = await import('../../services/workspace.service.js');
     const utilsModule = await import('../../utils/index.js');
     workspaceRoutes = routeModule.workspaceRoutes;
+    WorkspaceService = workspaceServiceModule.WorkspaceService;
     prisma = utilsModule.prisma;
   });
 
@@ -94,6 +97,36 @@ describe('workspace routes', () => {
       });
     } finally {
       await app.close();
+    }
+  });
+
+  it('forwards explicit background service confirmation to the merge service', async () => {
+    const resolveIdentity = vi.spyOn(
+      WorkspaceService.prototype,
+      'resolveInvocationMemberForWorkspace',
+    ).mockResolvedValue(null);
+    const merge = vi.spyOn(WorkspaceService.prototype, 'merge').mockResolvedValue('merge-sha');
+    const app = await buildTestApp();
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/workspaces/workspace-1/merge',
+        payload: {
+          commitMessage: 'fix: merge safely',
+          stopActiveServices: true,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(merge).toHaveBeenCalledWith('workspace-1', expect.objectContaining({
+        commitMessage: 'fix: merge safely',
+        stopActiveServices: true,
+      }));
+    } finally {
+      await app.close();
+      merge.mockRestore();
+      resolveIdentity.mockRestore();
     }
   });
 });

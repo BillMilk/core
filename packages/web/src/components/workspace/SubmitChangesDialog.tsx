@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react'
 import { ArrowRight, Loader2, Upload } from 'lucide-react'
+import type { WorkspaceBackgroundServiceDto } from '@agent-tower/shared'
 import { useI18n } from '@/lib/i18n'
 import { Modal } from '@/components/ui/modal'
+import { MergeActiveServicesNotice } from './MergeActiveServicesNotice'
 
 export interface SubmitChangesDialogProps {
   isOpen: boolean
@@ -11,8 +13,11 @@ export interface SubmitChangesDialogProps {
   /** AI 生成的初始提交消息（用户编辑后不再覆盖） */
   commitMessage?: string | null
   isPending: boolean
+  activeServices: WorkspaceBackgroundServiceDto[]
+  isCheckingServices: boolean
+  serviceCheckFailed: boolean
   error?: string | null
-  onConfirm: (message: string | undefined) => void
+  onConfirm: (message: string | undefined, stopActiveServices: boolean) => void
 }
 
 /** 提交变更确认弹窗：分支流向 + 可编辑提交消息（GitStatusBar 与 header Git 菜单共用） */
@@ -23,6 +28,9 @@ export function SubmitChangesDialog({
   targetBranch,
   commitMessage,
   isPending,
+  activeServices,
+  isCheckingServices,
+  serviceCheckFailed,
   error,
   onConfirm,
 }: SubmitChangesDialogProps) {
@@ -64,19 +72,23 @@ export function SubmitChangesDialog({
             {t('取消')}
           </button>
           <button
-            onClick={() => onConfirm(editableMessage.trim() || undefined)}
-            disabled={isPending}
+            onClick={() => onConfirm(editableMessage.trim() || undefined, activeServices.length > 0)}
+            disabled={isPending || isCheckingServices}
             className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-primary-foreground bg-primary hover:bg-primary/90 rounded-md transition-colors disabled:opacity-50"
           >
-            {isPending ? (
+            {isPending || isCheckingServices ? (
               <>
                 <Loader2 size={14} className="animate-spin" />
-                {t('正在提交...')}
+                {isCheckingServices
+                  ? t('正在检查后台服务...')
+                  : activeServices.length > 0
+                    ? t('正在停止服务并提交...')
+                    : t('正在提交...')}
               </>
             ) : (
               <>
                 <Upload size={14} />
-                {t('确认提交')}
+                {activeServices.length > 0 ? t('停止服务并提交') : t('确认提交')}
               </>
             )}
           </button>
@@ -111,6 +123,12 @@ export function SubmitChangesDialog({
             <p className="mt-1 text-[11px] text-muted-foreground/70">{t('留空将使用默认消息')}</p>
           )}
         </div>
+
+        <MergeActiveServicesNotice
+          services={activeServices}
+          isLoading={isCheckingServices}
+          isError={serviceCheckFailed}
+        />
 
         {error && (
           <div className="px-3 py-2 rounded-md bg-red-50 border border-red-200 text-sm text-red-700">

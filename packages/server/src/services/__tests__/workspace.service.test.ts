@@ -1286,6 +1286,109 @@ describe('WorkspaceService TeamRun workspace lifecycle', () => {
     expect(mergeIntoWorktreeMock).not.toHaveBeenCalled();
   });
 
+  it('stops active background services before an explicitly confirmed merge', async () => {
+    const { childWorkspace, invocation } = await createTeamRunChildMergeFixture({
+      reviewVerdict: 'APPROVED',
+    });
+    await prisma.workspaceBackgroundService.create({
+      data: {
+        workspaceId: childWorkspace.id,
+        name: 'web',
+        command: 'node',
+        desiredState: 'RUNNING',
+        runtimeState: 'RUNNING',
+        runtimeInstanceId: 'runtime-web',
+        pid: 4321,
+      },
+    });
+    const stopAllForWorkspace = vi.fn(async (workspaceId: string) => {
+      await prisma.workspaceBackgroundService.updateMany({
+        where: { workspaceId },
+        data: {
+          desiredState: 'STOPPED',
+          runtimeState: 'STOPPED',
+          runtimeInstanceId: null,
+          pid: null,
+        },
+      });
+    });
+    const lifecycleService = new WorkspaceService(
+      new TeamLockService(),
+      { stopAllForWorkspace },
+    );
+
+    await expect(lifecycleService.merge(childWorkspace.id, {
+      lockOwnerId: invocation.id,
+      invocationId: invocation.id,
+      stopActiveServices: true,
+    })).resolves.toBe('child-merge-sha');
+
+    expect(stopAllForWorkspace).toHaveBeenCalledOnce();
+    expect(stopAllForWorkspace).toHaveBeenCalledWith(childWorkspace.id);
+    expect(mergeIntoWorktreeMock).toHaveBeenCalledOnce();
+    await expect(prisma.workspaceBackgroundService.findFirst({
+      where: { workspaceId: childWorkspace.id },
+    })).resolves.toMatchObject({
+      desiredState: 'STOPPED',
+      runtimeState: 'STOPPED',
+      runtimeInstanceId: null,
+    });
+  });
+
+  it('does not stop background services when a merge gate rejects the request', async () => {
+    const { childWorkspace, invocation } = await createTeamRunChildMergeFixture();
+    await prisma.workspaceBackgroundService.create({
+      data: {
+        workspaceId: childWorkspace.id,
+        name: 'web',
+        command: 'node',
+        desiredState: 'RUNNING',
+        runtimeState: 'RUNNING',
+      },
+    });
+    const stopAllForWorkspace = vi.fn();
+    const lifecycleService = new WorkspaceService(
+      new TeamLockService(),
+      { stopAllForWorkspace },
+    );
+
+    await expect(lifecycleService.merge(childWorkspace.id, {
+      lockOwnerId: invocation.id,
+      invocationId: invocation.id,
+      stopActiveServices: true,
+    })).rejects.toMatchObject({ code: 'REVIEW_REQUIRED' });
+
+    expect(stopAllForWorkspace).not.toHaveBeenCalled();
+    expect(mergeIntoWorktreeMock).not.toHaveBeenCalled();
+  });
+
+  it('does not start a merge when an active background service cannot be stopped', async () => {
+    const { childWorkspace, invocation } = await createTeamRunChildMergeFixture({
+      reviewVerdict: 'APPROVED',
+    });
+    await prisma.workspaceBackgroundService.create({
+      data: {
+        workspaceId: childWorkspace.id,
+        name: 'web',
+        command: 'node',
+        desiredState: 'RUNNING',
+        runtimeState: 'RUNNING',
+      },
+    });
+    const stopError = new Error('stop failed');
+    const lifecycleService = new WorkspaceService(
+      new TeamLockService(),
+      { stopAllForWorkspace: vi.fn().mockRejectedValue(stopError) },
+    );
+
+    await expect(lifecycleService.merge(childWorkspace.id, {
+      lockOwnerId: invocation.id,
+      invocationId: invocation.id,
+      stopActiveServices: true,
+    })).rejects.toBe(stopError);
+    expect(mergeIntoWorktreeMock).not.toHaveBeenCalled();
+  });
+
   it('rechecks active background services after acquiring the merge target lock', async () => {
     const { childWorkspace, invocation } = await createTeamRunChildMergeFixture({
       reviewVerdict: 'APPROVED',
