@@ -33,7 +33,7 @@ DriverSession 可以跨 turn 保留协议连接和 external session id，但 Msg
 
 ACP 协议违规、连接关闭或 adapter 进程退出会使当前 transport 不可复用，必须停止对应进程、执行 launch cleanup 并清空 session-ready 状态。DriverSession 本身可继续持有 external session id 与同生命周期 credential；下一次 turn 为新 child 分配独立 `runtimeInstanceId`，重新 initialize 并通过 `session/load` 恢复。旧 transport 的迟到 close/exit 不得清理新 transport。
 
-ACP 在 sendMessage 替换 active turn 时先用 `session/cancel` 等待 prompt 收敛，健康 DriverSession 可供该 follow-up 复用；只有取消失败或超时才销毁连接。用户显式停止整个 Tower Session 时关闭 DriverSession，以便同步撤销其 credential。用户主动取消造成的 prompt rejection 不得投影为连接错误。同一 Tower Session 真正重连使用 `session/load`；agent 回放的历史必须先投影到临时 MsgStore，再与本地 snapshot 按稳定 ACP entry ID 做线性合并，本地 user message 保持权威，并以单个 `/entries` replacement patch 提交，不能逐条追加回放事件。跨 Tower Session 只续接原生上下文时优先使用 Agent 声明支持的 `session/resume`；不支持时回退 `session/load`，但 load 阶段的旧历史不得导入新的 Tower Session。
+ACP 在 sendMessage 替换 active turn 时先用 `session/cancel` 等待 prompt 收敛，健康 DriverSession 可供该 follow-up 复用；只有取消失败或超时才销毁连接。用户显式停止整个 Tower Session 时关闭 DriverSession，以便同步撤销其 credential。用户主动取消造成的 prompt rejection 不得投影为连接错误。同一 Tower Session 真正重连时，COMPLETED/FAILED/CANCELLED 且持有完整持久化 snapshot 的 follow-up 使用 context-only `session/resume`；若 Agent 不支持 resume，可回退 `session/load`，但不得导入其历史。RUNNING 等未完成状态使用 `session/load` 补齐可能未落盘的历史：回放先投影到临时 MsgStore，再按稳定 ACP entry ID 和有序内容语义与本地 snapshot 合并，以本轮新建 user message 为插入边界并保持本地 user message 权威，最后用单个 `/entries` replacement patch 提交，不能逐条追加回放事件。跨 Tower Session 只续接原生上下文时也使用 context-only resume，load fallback 同样不得导入旧历史。
 
 `Session.status = RUNNING` 跟随逻辑 Runtime turn 启动，每次初始 prompt 和 follow-up 都必须在 `startTurn` 边界持久化；不能依赖 OS process `started`，因为 ACP 会跨 turn 复用同一进程。process 事件只维护 `ExecutionProcess`，停止操作也必须优先检查 active turn，再使用持久化终态作兜底。
 

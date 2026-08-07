@@ -83,6 +83,19 @@ function isAgentProgressPatch(patch: unknown): boolean {
   });
 }
 
+function hasCompletePersistedSnapshot(session: Pick<SessionExecutionRecord, 'status' | 'logSnapshot'>): boolean {
+  if (![SessionStatus.COMPLETED, SessionStatus.FAILED, SessionStatus.CANCELLED]
+    .includes(session.status as SessionStatus) || !session.logSnapshot) {
+    return false;
+  }
+  try {
+    const snapshot = JSON.parse(session.logSnapshot) as Partial<NormalizedConversation>;
+    return Array.isArray(snapshot.entries);
+  } catch {
+    return false;
+  }
+}
+
 interface StopSessionOptions {
   skipTeamRunReconcile?: boolean;
 }
@@ -325,6 +338,10 @@ export class SessionManager {
         return null;
       }
       this.ensureExecutionRecordIsLive(session);
+      const resumeMode: RuntimeResumeMode = this.normalizeRuntimeType(session.runtimeType) === RuntimeType.ACP
+        && hasCompletePersistedSnapshot(session)
+        ? 'resume'
+        : 'load';
 
       // Always validate the effective provider, including when it is inherited
       // from the session or explicitly repeats the current provider. A stale
@@ -424,7 +441,14 @@ export class SessionManager {
       if (providerId && providerId !== session.providerId) {
         await this.runtimeCoordinator.disposeSession(id);
       }
-      await this.startRuntimeTurn(session, message, agentSessionId, effectiveProviderId);
+      await this.startRuntimeTurn(
+        session,
+        message,
+        agentSessionId,
+        effectiveProviderId,
+        resumeMode,
+        userEntry.id,
+      );
       return session;
     } finally {
       reservation.release();
@@ -588,6 +612,7 @@ export class SessionManager {
     resumeExternalSessionId?: string | null,
     providerId: string | null = session.providerId,
     resumeMode: RuntimeResumeMode = 'load',
+    historyBoundaryEntryId?: string,
   ): Promise<void> {
     const workingDir = this.getExecutionWorkingDir(session);
     const env = ExecutionEnv.default(workingDir);
@@ -636,6 +661,7 @@ export class SessionManager {
           : runtimePrompt,
         resumeExternalSessionId,
         resumeMode,
+        historyBoundaryEntryId,
       });
       // Terminal persistence is driven by Runtime turn events. Attach a catch
       // so the public start/message methods do not leave a rejected handle

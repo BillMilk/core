@@ -14,6 +14,7 @@ import type {
   RuntimeDriver,
   RuntimeOpenInput,
   RuntimeRunTurnInput,
+  StartRuntimeTurnInput,
   RuntimeTurnOutcome,
 } from '../../runtime/contracts.js';
 import { StaticRuntimeRegistry } from '../../runtime/runtime-registry.js';
@@ -340,6 +341,11 @@ describe('SessionManager session status vs real process state', () => {
         runtimeType: 'ACP',
         status: SessionStatus.COMPLETED,
         externalSessionId: 'external-acp-session',
+        logSnapshot: JSON.stringify({
+          sessionId: 'external-acp-session',
+          entries: [],
+          seq: 3,
+        }),
       },
     });
 
@@ -347,7 +353,7 @@ describe('SessionManager session status vs real process state', () => {
     const hasActiveTurn = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
     const runtimeCoordinator = {
       hasActiveTurn,
-      startTurn: vi.fn(async () => ({ turnId: 'turn-2', completion })),
+      startTurn: vi.fn(async (_input: StartRuntimeTurnInput) => ({ turnId: 'turn-2', completion })),
       abandonTurn: vi.fn(async () => true),
       cancelTurn: vi.fn(async () => undefined),
       disposeSession: vi.fn(async () => undefined),
@@ -362,8 +368,13 @@ describe('SessionManager session status vs real process state', () => {
       towerSessionId: session.id,
       runtimeType: 'ACP',
       resumeExternalSessionId: 'external-acp-session',
+      resumeMode: 'resume',
+      historyBoundaryEntryId: expect.any(String),
       prompt: expect.stringContaining('::agent-download{file="output/report.pdf"}'),
     }));
+    const startInput = runtimeCoordinator.startTurn.mock.calls[0]?.[0];
+    expect(startInput?.msgStore.getSnapshot().entries.at(-1)?.id)
+      .toBe(startInput?.historyBoundaryEntryId);
     expect((await prisma.session.findUnique({ where: { id: session.id } }))?.status)
       .toBe(SessionStatus.RUNNING);
     expect(await prisma.executionProcess.count({ where: { sessionId: session.id } })).toBe(0);
@@ -379,6 +390,59 @@ describe('SessionManager session status vs real process state', () => {
     expect(runtimeCoordinator.disposeSession).toHaveBeenCalledWith(session.id);
     expect((await prisma.session.findUnique({ where: { id: session.id } }))?.status)
       .toBe(SessionStatus.CANCELLED);
+    await manager.destroyAll();
+  });
+
+  it('loads ACP history for an incomplete session even when a snapshot exists', async () => {
+    const provider = {
+      id: 'interrupted-acp-provider',
+      name: 'Interrupted ACP Provider',
+      agentType: AgentType.CODEX,
+      runtimeType: RuntimeType.ACP,
+      env: {},
+      config: {},
+      isDefault: false,
+    };
+    getProviderByIdMock.mockReturnValue(provider);
+    const { session } = await createSessionFixture({ providerId: provider.id });
+    await prisma.session.update({
+      where: { id: session.id },
+      data: {
+        runtimeType: RuntimeType.ACP,
+        status: SessionStatus.RUNNING,
+        externalSessionId: 'interrupted-acp-session',
+        logSnapshot: JSON.stringify({
+          sessionId: 'interrupted-acp-session',
+          entries: [],
+          seq: 2,
+        }),
+      },
+    });
+
+    const completion = new Promise<never>(() => undefined);
+    const runtimeCoordinator = {
+      hasActiveTurn: vi.fn(() => false),
+      startTurn: vi.fn(async (_input: StartRuntimeTurnInput) => ({ turnId: 'turn-2', completion })),
+      abandonTurn: vi.fn(async () => true),
+      cancelTurn: vi.fn(async () => undefined),
+      disposeSession: vi.fn(async () => undefined),
+      destroyAll: vi.fn(async () => undefined),
+    };
+    const manager = new SessionManager(new EventBus());
+    (manager as any).runtimeCoordinator = runtimeCoordinator;
+
+    await manager.sendMessage(session.id, 'continue after interruption');
+
+    expect(runtimeCoordinator.startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      towerSessionId: session.id,
+      runtimeType: RuntimeType.ACP,
+      resumeExternalSessionId: 'interrupted-acp-session',
+      resumeMode: 'load',
+      historyBoundaryEntryId: expect.any(String),
+    }));
+    const startInput = runtimeCoordinator.startTurn.mock.calls[0]?.[0];
+    expect(startInput?.msgStore.getSnapshot().entries.at(-1)?.id)
+      .toBe(startInput?.historyBoundaryEntryId);
     await manager.destroyAll();
   });
 
@@ -645,13 +709,11 @@ describe('SessionManager session status vs real process state', () => {
     }) + '\n');
     firstPty.emitData(JSON.stringify({ type: 'turn.completed' }) + '\n');
     await completed;
+    await vi.waitFor(() => expect(autoCommitSpy).toHaveBeenCalledTimes(1));
 
     const followUp = manager.sendMessage(session.id, 'follow-up');
-    await vi.waitFor(() => {
-      expect(waitForAutoCommitSpy).toHaveBeenCalledWith(session.id);
-      expect(autoCommitSpy).toHaveBeenCalledTimes(1);
-      expect(spawnMock).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(() => expect(waitForAutoCommitSpy).toHaveBeenCalledWith(session.id));
+    expect(spawnMock).toHaveBeenCalledTimes(1);
 
     releaseAutoCommit();
     await followUp;
@@ -799,7 +861,7 @@ describe('SessionManager session status vs real process state', () => {
 
     await expect(manager.sendMessage(session.id, 'follow-up')).rejects
       .toThrow('Provider not found: deleted-provider');
-    expect(autoCommitSpy).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(autoCommitSpy).toHaveBeenCalledTimes(1));
     expect(spawnMock).toHaveBeenCalledTimes(1);
 
     releaseAutoCommit();

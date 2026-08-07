@@ -28,6 +28,65 @@ describe('reconcileAcpHistoryEntries', () => {
     ]);
   });
 
+  it('matches replayed assistant messages when Codex changes live IDs to history item IDs', () => {
+    const local = [entry('acp-message-live-msg', 'same response', 'assistant_message', 10)];
+    const replayed = [entry('acp-message-history-item', 'same response', 'assistant_message', 20)];
+
+    expect(reconcileAcpHistoryEntries(local, replayed)).toBeUndefined();
+  });
+
+  it('completes an ID-drifted partial assistant message in place', () => {
+    const local = [entry('acp-message-live-msg', 'partial response', 'assistant_message', 10)];
+    const replayed = [entry('acp-message-history-item', 'partial response completed', 'assistant_message', 20)];
+
+    expect(reconcileAcpHistoryEntries(local, replayed)).toEqual([
+      entry('acp-message-live-msg', 'partial response completed', 'assistant_message', 10),
+    ]);
+  });
+
+  it('matches replayed thinking when load combines multiple live reasoning entries', () => {
+    const local = [
+      entry('acp-thought-live-one', 'Plan the ', 'thinking'),
+      entry('acp-tool-read', 'read output', 'tool_use'),
+      entry('acp-thought-live-two', 'implementation', 'thinking'),
+    ];
+    const replayed = [entry('acp-thought-history-item', 'Plan theimplementation', 'thinking')];
+
+    expect(reconcileAcpHistoryEntries(local, replayed)).toBeUndefined();
+  });
+
+  it('keeps legitimate repeated assistant messages using occurrence-aware matching', () => {
+    const local = [entry('acp-message-live-one', 'Done')];
+    const replayed = [
+      entry('acp-message-history-one', 'Done'),
+      entry('acp-message-history-two', 'Done'),
+    ];
+
+    expect(reconcileAcpHistoryEntries(local, replayed)).toEqual([
+      local[0],
+      replayed[1],
+    ]);
+  });
+
+  it('inserts missing loaded history before the current local user message', () => {
+    const local = [
+      entry('acp-message-live-one', 'Known response'),
+      entry('current-user', 'Continue', 'user_message'),
+    ];
+    const replayed = [
+      entry('acp-message-history-one', 'Known response'),
+      entry('acp-message-history-two', 'Recovered response'),
+    ];
+
+    expect(reconcileAcpHistoryEntries(local, replayed, {
+      historyBoundaryEntryId: 'current-user',
+    })).toEqual([
+      local[0],
+      replayed[1],
+      local[1],
+    ]);
+  });
+
   it('appends stable messages and tools that are missing locally', () => {
     const local = [entry('local-user', 'continue', 'user_message')];
     const replayed = [

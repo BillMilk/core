@@ -436,6 +436,7 @@ class AcpDriverSession implements DriverSession {
     const mergedEntries = reconcileAcpHistoryEntries(
       turn.msgStore.getSnapshot().entries,
       replayStore.getSnapshot().entries,
+      { historyBoundaryEntryId: turn.historyBoundaryEntryId },
     );
     if (!mergedEntries) return;
 

@@ -71,6 +71,8 @@ export interface RuntimeRunTurnInput {
   msgStore: MsgStore;
   resumeExternalSessionId?: string | null;
   resumeMode?: RuntimeResumeMode;
+  /** Local entry that must remain after any history imported by session/load. */
+  historyBoundaryEntryId?: string;
 }
 
 export interface RuntimeTurnOutcome {
@@ -114,6 +116,7 @@ export interface StartRuntimeTurnInput extends RuntimeOpenInput {
   prompt: string;
   resumeExternalSessionId?: string | null;
   resumeMode?: RuntimeResumeMode;
+  historyBoundaryEntryId?: string;
 }
 
 export interface RuntimeTurnHandle {

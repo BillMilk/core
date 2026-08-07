@@ -130,12 +130,14 @@ describe('RuntimeCoordinator', () => {
       ...input,
       resumeExternalSessionId: 'external-1',
       resumeMode: 'resume',
+      historyBoundaryEntryId: 'current-user',
     });
 
     expect(vi.mocked(session.runTurn)).toHaveBeenCalledWith(
       expect.objectContaining({
         resumeExternalSessionId: 'external-1',
         resumeMode: 'resume',
+        historyBoundaryEntryId: 'current-user',
       }),
       expect.anything(),
     );

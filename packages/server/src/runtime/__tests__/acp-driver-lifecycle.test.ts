@@ -360,6 +360,48 @@ describe('AcpRuntimeDriver lifecycle', () => {
     await session.close();
   });
 
+  it('does not replay Codex history when load changes the message ID', async () => {
+    const { sink, input } = setup();
+    const localEntries: NormalizedEntry[] = [
+      {
+        id: `acp-message-${Buffer.from('msg-live').toString('base64url')}`,
+        timestamp: 1,
+        entryType: 'assistant_message',
+        content: 'already persisted response',
+      },
+      { id: 'current-user', timestamp: 2, entryType: 'user_message', content: 'continue' },
+    ];
+    acpState.loadUpdates = [{
+      sessionId: 'external-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        messageId: 'item-1',
+        content: { type: 'text', text: 'already persisted response' },
+      },
+    }];
+    const msgStore = new MsgStore();
+    msgStore.restoreFromSnapshot({ sessionId: 'external-1', entries: localEntries, seq: 4 });
+    const session = await new AcpRuntimeDriver().open(input, sink);
+
+    const turn = await session.runTurn({
+      turnId: 'turn-id-drift',
+      prompt: 'continue',
+      msgStore,
+      resumeExternalSessionId: 'external-1',
+      historyBoundaryEntryId: 'current-user',
+    }, sink);
+
+    const patches = vi.mocked(sink.stream).mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.type === 'conversation_patch');
+    expect(patches).toHaveLength(1);
+    expect(msgStore.getSnapshot().entries).toEqual(localEntries);
+
+    await session.cancelTurn('turn-id-drift');
+    await turn.completion;
+    await session.close();
+  });
+
   it('uses session/resume for a context-only follow-up', async () => {
     const { sink, input } = setup();
     const session = await new AcpRuntimeDriver().open(input, sink);

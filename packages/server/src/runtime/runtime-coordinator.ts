@@ -90,6 +90,7 @@ export class RuntimeCoordinator {
         msgStore: input.msgStore,
         resumeExternalSessionId: input.resumeExternalSessionId,
         resumeMode: input.resumeMode,
+        historyBoundaryEntryId: input.historyBoundaryEntryId,
       }, sink);
       void driverTurn.completion.then(
         (outcome) => {
