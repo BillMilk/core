@@ -8,9 +8,22 @@ import { RoomTimeline } from '../RoomTimeline';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { roomMessageDetailRefetchMock } = vi.hoisted(() => ({
+const { roomMessageDetailRefetchMock, scrollToBottomMock } = vi.hoisted(() => ({
   roomMessageDetailRefetchMock: vi.fn(),
+  scrollToBottomMock: vi.fn(() => true),
 }));
+
+vi.mock('use-stick-to-bottom', async () => {
+  const ReactModule = await import('react');
+  return {
+    useStickToBottom: () => ({
+      scrollRef: ReactModule.useRef<HTMLElement | null>(null),
+      contentRef: ReactModule.useRef<HTMLElement | null>(null),
+      isAtBottom: true,
+      scrollToBottom: scrollToBottomMock,
+    }),
+  };
+});
 
 vi.mock('@/hooks/use-app-settings', () => ({
   useAppSettings: () => ({ data: { locale: 'en' } }),
@@ -267,6 +280,7 @@ describe('RoomTimeline optimistic sending', () => {
   beforeEach(() => {
     roomMessageDetailRefetchMock.mockReset();
     roomMessageDetailRefetchMock.mockResolvedValue({ data: undefined, error: null });
+    scrollToBottomMock.mockClear();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -326,6 +340,41 @@ describe('RoomTimeline optimistic sending', () => {
     expect(container.textContent).toContain('Hello team');
     expect(container.textContent).not.toContain('Sending...');
     expect(container.textContent).not.toContain('Send failed');
+  });
+
+  it('scrolls to the latest item when a new room message arrives', async () => {
+    const firstMessage = createRoomMessage('First message');
+    const secondMessage = {
+      ...createRoomMessage('Second message'),
+      id: 'message-2',
+      createdAt: '2026-05-27T00:00:02.000Z',
+    };
+    const requestAnimationFrameSpy = vi
+      .spyOn(globalThis, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        callback(0);
+        return 0;
+      });
+
+    await act(async () => {
+      root.render(
+        <I18nProvider>
+          <RoomTimeline teamRun={teamRun} messages={[firstMessage]} onSendMessage={vi.fn()} />
+        </I18nProvider>,
+      );
+    });
+    scrollToBottomMock.mockClear();
+
+    await act(async () => {
+      root.render(
+        <I18nProvider>
+          <RoomTimeline teamRun={teamRun} messages={[firstMessage, secondMessage]} onSendMessage={vi.fn()} />
+        </I18nProvider>,
+      );
+    });
+
+    expect(scrollToBottomMock).toHaveBeenCalledWith({ animation: 'smooth', ignoreEscapes: true });
+    requestAnimationFrameSpy.mockRestore();
   });
 
   it('marks failed sends and restores text plus uploaded attachments', async () => {

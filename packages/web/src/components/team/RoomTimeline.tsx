@@ -978,6 +978,27 @@ export function RoomTimeline({
     resize: 'smooth',
     initial: 'instant',
   })
+  const userScrolledAwayRef = useRef(false)
+  const previousLatestItemKeyRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    const element = scrollRef.current
+    if (!element) return
+
+    const handleWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0) {
+        userScrolledAwayRef.current = true
+        return
+      }
+
+      if (event.deltaY > 0 && element.scrollHeight - element.scrollTop - element.clientHeight <= 70) {
+        userScrolledAwayRef.current = false
+      }
+    }
+
+    element.addEventListener('wheel', handleWheel, { passive: true })
+    return () => element.removeEventListener('wheel', handleWheel)
+  }, [scrollRef])
 
   const { data: providersList } = useProviders()
 
@@ -1021,6 +1042,25 @@ export function RoomTimeline({
     () => buildRoomTimelineItems(messageList, teamRun.workRequests ?? [], teamRun.invocations ?? []),
     [messageList, teamRun.invocations, teamRun.workRequests],
   )
+
+  useEffect(() => {
+    const latestItemKey = timelineItems.at(-1)?.key ?? null
+    const previousLatestItemKey = previousLatestItemKeyRef.current
+    previousLatestItemKeyRef.current = latestItemKey
+
+    if (
+      previousLatestItemKey == null
+      || latestItemKey == null
+      || latestItemKey === previousLatestItemKey
+      || userScrolledAwayRef.current
+    ) {
+      return
+    }
+
+    requestAnimationFrame(() => {
+      void scrollToBottom({ animation: 'smooth', ignoreEscapes: true })
+    })
+  }, [scrollToBottom, timelineItems])
 
   const activeInvocations = useMemo(
     () => (teamRun.invocations ?? []).filter((invocation) => ACTIVE_ROOM_INVOCATION_STATUSES.has(invocation.status)),
@@ -1218,6 +1258,8 @@ export function RoomTimeline({
     setSubmitError(null)
     setPendingMessages([])
     clearAttachments()
+    userScrolledAwayRef.current = false
+    previousLatestItemKeyRef.current = null
     setStopPromptInvocationId(null)
     if (textareaRef.current) {
       textareaRef.current.style.height = compactComposer ? '40px' : '72px'

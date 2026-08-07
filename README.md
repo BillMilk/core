@@ -2,15 +2,24 @@
 
 # Agent Tower
 
-> Too many terminal sessions (Claude Code / Codex ...) open? Here's their command center.
+> The command center for your army of agents.
+
+## Highlights
+
+### 1. Kanban, Isolated Workspaces, and Multi-Agent Support
+
+Agent Tower supports a range of agent backends, including Codex, Claude Code, Gemini CLI, Kimi CLI, Cursor CLI, and more, so you can use whichever one fits the job. Its task status system (**Review**, **Running**, **Done**, and more) makes every task's state easy to understand, while an automatically isolated workspace keeps each task from interfering with the others.
 
 <p align="center">
-  <img src="./docs/assets/agent-tower-demo.gif" alt="Agent Tower CLI selection, live Codex execution, and automatic review workflow" width="100%" />
+  <img src="./docs/assets/agent-tower-demo.gif" alt="Choosing an agent, running a task with Codex, and watching the task move from Running to Review" width="100%" />
 </p>
 
+### 2. Team Mode (Real Multi-Agent Collaboration)
+
+In Team mode, agents work together in a shared group chat. Each agent remains an independent member, so one agent's long context cannot contaminate the others or send the task off course. You can designate a lead to break down the task, an implementer to make the changes, a reviewer to inspect quality, and a tester to verify the result. When the work is complete, the task moves to **Review**. This workflow goes a long way toward producing usable results; in the author's own testing, teams have collaborated continuously for as long as 48 hours to complete complex tasks. Here is a simple example:
+
 <p align="center">
-  <strong>Team mode: Codex implementation · Claude Code DeepSeek V4 review · Codex verification</strong><br />
-  <img src="./docs/assets/agent-tower-team-demo.gif" alt="Agent Tower Team mode with Codex implementation, Claude Code DeepSeek V4 review, Codex verification, and automatic review transition" width="100%" />
+  <img src="./docs/assets/agent-tower-team-demo.gif" alt="In TeamRun, the lead breaks down the task while implementer, reviewer, and tester members complete their work before the task moves to Review" width="100%" />
 </p>
 
 ## Why I Built This
@@ -28,29 +37,29 @@ So Agent Tower was born out of necessity — a single dashboard that brings all 
 
 ## Core Features
 
-### 🎯 One Dashboard for All Agents
+### 1. One Dashboard for All Agents
 
-No more juggling terminal windows. All projects, all tasks, all agents — one page. Create a task, pick an agent, hit start — output, progress, and code changes are visible in real time. When a task finishes, it automatically moves to "Ready for Review". You decide whether to merge.
+No more juggling terminal windows. All projects, all tasks, all agents — one page. Create a task, pick an agent, hit start — output, progress, and code changes are visible in real time. When a task finishes, it automatically moves to **Review**. You decide whether to merge.
 
-### 🔀 Automatic Git Worktree Isolation
+### 2. Automatic Git Worktree Isolation
 
 Each task gets its own Git branch automatically. Agents work in isolated environments, eliminating code conflicts at the root. One-click merge back to main, with line-by-line review in the diff viewer.
 
-### 💰 Pick Providers Per Task, Save Money Effortlessly
+### 3. Pick Providers Per Task, Save Money Effortlessly
 
 Each task can use a different provider. Throw translation tasks to MiniMax, planning to Opus, execution to Codex — each in their lane, no waiting for one task to finish before switching. Agent Tower helps you spend smart.
 
-### 📱 Monitor Progress from Your Phone
+### 4. Monitor Progress from Your Phone
 
 One-click Cloudflare tunnel for remote access — open the dashboard right in your phone's browser. Away from your desk? Still in the loop. Task done? Desktop notification or Lark webhook lets you know it's review time.
 
-### 🤖 Supports Major AI Agents
+### 5. Supports Major AI Agents
 
-- **Claude Code** · **Gemini CLI** · **Cursor Agent** · **Codex**
+**Claude Code** · **Gemini CLI** · **Cursor Agent** · **Codex** · **Kimi CLI** · **Pi** · ...
 
 No vendor lock-in. Use whichever agent you prefer. Each supports custom Profile variants.
 
-### 📡 MCP Protocol Integration
+### 6. MCP Protocol Integration
 
 Built-in MCP server lets agents read the task board, claim tasks, and report progress directly. You're not just managing agents — they can collaborate proactively.
 
@@ -88,8 +97,6 @@ Let Claude Code operate the task board directly:
 If access password is enabled, MCP calls use `AGENT_TOWER_INTERNAL_TOKEN` instead of browser cookies. Prefer copying the generated MCP config from Agent Tower settings, or pass this env var through your MCP client's secret/env mechanism. Do not hard-code a real token in shared config.
 
 ### Development from Source
-
-Source development requires Node.js `>=22.19.0` and pnpm `11.18.0`. The repository pins the pnpm version through its `packageManager` field.
 
 ```bash
 git clone https://github.com/agent-tower/core.git
