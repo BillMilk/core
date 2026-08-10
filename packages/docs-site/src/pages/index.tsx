@@ -2,6 +2,7 @@ import clsx from 'clsx';
 import Link from '@docusaurus/Link';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Layout from '@theme/Layout';
+import { useState } from 'react';
 
 import styles from './index.module.css';
 
@@ -28,68 +29,55 @@ const features = [
   },
 ];
 
-function HeroVisual() {
+const demos = [
+  {
+    id: 'solo',
+    label: '单 Agent',
+    src: '/img/demos/agent-tower-demo-zh.gif',
+    alt: '选择 Agent、使用 Codex 执行任务，并观察任务从运行中流转到待审查',
+  },
+  {
+    id: 'team',
+    label: '团队模式',
+    src: '/img/demos/agent-tower-team-demo-zh.gif',
+    alt: 'TeamRun 中负责人拆解任务，实施、审查和测试成员依次完成工作，任务最终进入待审查',
+  },
+] as const;
+
+type DemoId = (typeof demos)[number]['id'];
+
+function HeroDemo() {
+  const [activeDemoId, setActiveDemoId] = useState<DemoId>('solo');
+  const activeDemo = demos.find((demo) => demo.id === activeDemoId) ?? demos[0];
+
   return (
-    <div className={styles.heroVisual} aria-label="Agent Tower interface preview">
-      <div className={styles.previewTopbar}>
-        <span />
-        <span />
-        <span />
-        <strong>Agent Tower</strong>
+    <figure className={styles.heroDemo}>
+      <div className={styles.demoToolbar}>
+        <span className={styles.demoLabel}>产品演示</span>
+        <div className={styles.demoTabs} role="group" aria-label="选择产品演示">
+          {demos.map((demo) => (
+            <button
+              aria-pressed={activeDemoId === demo.id}
+              className={styles.demoTab}
+              key={demo.id}
+              onClick={() => setActiveDemoId(demo.id)}
+              type="button"
+            >
+              {demo.label}
+            </button>
+          ))}
+        </div>
       </div>
-      <div className={styles.previewBody}>
-        <aside className={styles.previewSidebar}>
-          <div className={styles.previewSectionTitle}>IN REVIEW</div>
-          <div className={clsx(styles.previewTask, styles.previewTaskActive)}>
-            <span className={styles.statusReview} />
-            <div>
-              <strong>web / diff viewer</strong>
-              <small>Codex · ready</small>
-            </div>
-          </div>
-          <div className={styles.previewTask}>
-            <span className={styles.statusRunning} />
-            <div>
-              <strong>server / MCP tools</strong>
-              <small>Claude Code · running</small>
-            </div>
-          </div>
-          <div className={styles.previewTask}>
-            <span className={styles.statusTodo} />
-            <div>
-              <strong>docs / guide</strong>
-              <small>Gemini · queued</small>
-            </div>
-          </div>
-        </aside>
-        <main className={styles.previewMain}>
-          <div className={styles.previewHeader}>
-            <div>
-              <strong>Review Workspace</strong>
-              <small>feat/task-diff-panel</small>
-            </div>
-            <button type="button">Merge</button>
-          </div>
-          <div className={styles.previewGrid}>
-            <div className={styles.previewPanel}>
-              <div className={styles.panelTitle}>Agent log</div>
-              <p>Analyzed route structure and moved Git operations into a shared service.</p>
-              <p>Running tests for workspace merge flow...</p>
-              <div className={styles.logLine} />
-              <div className={styles.logLineShort} />
-            </div>
-            <div className={styles.previewPanel}>
-              <div className={styles.panelTitle}>Git changes</div>
-              <pre>
-                <code>{`+ export async function mergeWorkspace()
-- app.post('/merge', handler)
-+ tests passed`}</code>
-              </pre>
-            </div>
-          </div>
-        </main>
+      <div className={styles.demoMedia} aria-live="polite">
+        <img
+          alt={activeDemo.alt}
+          className={styles.demoImage}
+          fetchPriority="high"
+          key={activeDemo.id}
+          src={activeDemo.src}
+        />
       </div>
-    </div>
+    </figure>
   );
 }
 
@@ -168,7 +156,7 @@ export default function Home() {
                 <code>agent-tower</code>
               </div>
             </div>
-            <HeroVisual />
+            <HeroDemo />
           </div>
         </section>
         <FeatureGrid />
