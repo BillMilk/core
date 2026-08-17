@@ -5,6 +5,8 @@ import { NotificationService } from '../services/notifications/index.js';
 import { TaskCleanupService } from '../services/task-cleanup.service.js';
 import { AgentCliEnvironmentService } from '../services/agent-cli/environment.service.js';
 import { WorkspaceBackgroundService } from '../services/workspace-background-service.service.js';
+import { TaskOrchestrationService } from '../services/task-orchestration.service.js';
+import { TaskOrchestrationScheduler } from '../services/task-orchestration-scheduler.js';
 import { prisma } from '../utils/index.js';
 // TerminalManager is lazy-imported to avoid eager native module (node-pty) loading
 // that could break getEventBus()/getSessionManager() if the import fails.
@@ -18,6 +20,8 @@ let notificationService: NotificationService | null = null;
 let taskCleanupService: TaskCleanupService | null = null;
 let agentCliEnvironmentService: AgentCliEnvironmentService | null = null;
 let workspaceBackgroundService: WorkspaceBackgroundService | null = null;
+let taskOrchestrationService: TaskOrchestrationService | null = null;
+let taskOrchestrationScheduler: TaskOrchestrationScheduler | null = null;
 
 export function getEventBus(): EventBus {
   if (!eventBus) {
@@ -52,6 +56,22 @@ export function getWorkspaceBackgroundService(): WorkspaceBackgroundService {
     workspaceBackgroundService = new WorkspaceBackgroundService();
   }
   return workspaceBackgroundService;
+}
+
+export function getTaskOrchestrationService(): TaskOrchestrationService {
+  if (!taskOrchestrationService) {
+    taskOrchestrationService = new TaskOrchestrationService(getEventBus());
+  }
+  return taskOrchestrationService;
+}
+
+export function getTaskOrchestrationScheduler(): TaskOrchestrationScheduler {
+  if (!taskOrchestrationScheduler) {
+    taskOrchestrationScheduler = new TaskOrchestrationScheduler({
+      service: getTaskOrchestrationService(),
+    });
+  }
+  return taskOrchestrationScheduler;
 }
 
 export async function getTerminalManager(): Promise<TerminalManager> {

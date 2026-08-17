@@ -28,6 +28,7 @@ model Project {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   tasks         Task[]
+  taskEvents    TaskEvent[]
 
   @@index([archivedAt])
   @@index([repoDeletedAt])
@@ -40,12 +41,23 @@ model Task {
   title       String
   description String?
   status      String      @default("TODO")
+  // Keep orchestration state separate from Kanban status for compatibility
+  // with the existing board and TeamRun lifecycle.
+  orchestrationStatus       String    @default("BACKLOG")
+  orchestrationClaimedBy    String?
+  orchestrationClaimedAt    DateTime?
+  orchestrationHeartbeatAt  DateTime?
+  orchestrationAttemptCount Int       @default(0)
+  orchestrationLastError    String?
   priority    Int         @default(0)
   position    Int         @default(0)
   projectId   String
   project     Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
   workspaces  Workspace[]
   teamRun     TeamRun?
+  dependencies TaskDependency[] @relation("TaskDependencies")
+  dependents   TaskDependency[] @relation("TaskDependents")
+  events       TaskEvent[]
   deletedAt   DateTime?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
@@ -55,6 +67,44 @@ model Task {
   @@index([deletedAt])
   @@index([projectId, deletedAt, status, position])
   @@index([deletedAt, updatedAt])
+  @@index([projectId, deletedAt, orchestrationStatus, priority, position])
+  @@index([orchestrationStatus, orchestrationHeartbeatAt])
+}
+
+// Directed edge: taskId cannot be scheduled until dependsOnTaskId is DONE.
+model TaskDependency {
+  id              String   @id @default(uuid())
+  taskId          String
+  task            Task     @relation("TaskDependencies", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOnTaskId String
+  dependsOnTask   Task     @relation("TaskDependents", fields: [dependsOnTaskId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+
+  @@unique([taskId, dependsOnTaskId])
+  @@index([taskId])
+  @@index([dependsOnTaskId])
+}
+
+// Append-only orchestration/audit record. Payloads are JSON strings so the
+// event log can later be exported as JSONL without changing the source data.
+model TaskEvent {
+  id             String   @id @default(uuid())
+  taskId         String
+  task           Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  projectId      String
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  type           String
+  fromStatus     String?
+  toStatus       String?
+  actorType      String   @default("SYSTEM")
+  actorId        String?
+  payload        String?
+  idempotencyKey String?  @unique
+  createdAt      DateTime @default(now())
+
+  @@index([taskId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([type, createdAt])
 }
 
 // 后台任务删除资源清理

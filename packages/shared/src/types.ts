@@ -14,6 +14,43 @@ export enum TaskStatus {
   CANCELLED = 'CANCELLED',
 }
 
+/**
+ * Durable state machine used by the dependency-aware orchestrator.
+ *
+ * This intentionally does not replace TaskStatus: TaskStatus remains the
+ * user-facing Kanban column while this state tracks worker ownership and
+ * recovery.
+ */
+export enum TaskOrchestrationStatus {
+  BACKLOG = 'BACKLOG',
+  READY = 'READY',
+  ASSIGNED = 'ASSIGNED',
+  RUNNING = 'RUNNING',
+  REVIEW = 'REVIEW',
+  MERGING = 'MERGING',
+  DONE = 'DONE',
+  BLOCKED = 'BLOCKED',
+  HANDOFF = 'HANDOFF',
+  RECOVERING = 'RECOVERING',
+  MERGE_FAILED = 'MERGE_FAILED',
+  CANCELLED = 'CANCELLED',
+}
+
+export type TaskEventType =
+  | 'task.created'
+  | 'task.updated'
+  | 'task.status_changed'
+  | 'task.dependency_added'
+  | 'task.dependency_removed'
+  | 'task.claimed'
+  | 'task.started'
+  | 'task.released'
+  | 'task.recovered'
+  | 'task.completed'
+  | 'task.failed'
+  | 'task.deleted'
+  | (string & {});
+
 /** 工作空间状态 */
 export enum WorkspaceStatus {
   ACTIVE = 'ACTIVE',
@@ -489,6 +526,13 @@ export interface Task {
   /** True when one or more large text fields were truncated in this payload. */
   isTruncated?: boolean
   status: TaskStatus
+  /** Durable orchestration state; omitted by older/compact API payloads. */
+  orchestrationStatus?: TaskOrchestrationStatus
+  orchestrationClaimedBy?: string | null
+  orchestrationClaimedAt?: string | null
+  orchestrationHeartbeatAt?: string | null
+  orchestrationAttemptCount?: number
+  orchestrationLastError?: string | null
   /** 优先级 (对应 Prisma priority) */
   priority?: number
   /** 排序位置 (对应 Prisma position) */
@@ -501,6 +545,43 @@ export interface Task {
   project?: Project
   createdAt?: string
   updatedAt?: string
+}
+
+/** A directed dependency edge between two tasks in the same project. */
+export interface TaskDependency {
+  id: string
+  taskId: string
+  dependsOnTaskId: string
+  createdAt?: string
+  task?: Pick<Task, 'id' | 'projectId' | 'title' | 'status' | 'orchestrationStatus'>
+  dependsOnTask?: Pick<Task, 'id' | 'projectId' | 'title' | 'status' | 'orchestrationStatus'>
+}
+
+/** Append-only task orchestration/audit record. */
+export interface TaskEvent {
+  id: string
+  taskId: string
+  projectId: string
+  type: TaskEventType
+  fromStatus?: string | null
+  toStatus?: string | null
+  actorType: string
+  actorId?: string | null
+  payload?: unknown
+  createdAt?: string
+}
+
+export interface TaskDependencyResponse {
+  taskId: string
+  prerequisites: TaskDependency[]
+  dependents: TaskDependency[]
+}
+
+export interface TaskReadinessResponse {
+  taskId: string
+  orchestrationStatus: TaskOrchestrationStatus
+  ready: boolean
+  blockers: TaskDependency[]
 }
 
 export type TaskBodySource = 'description' | 'historical_title' | 'none'
@@ -529,6 +610,7 @@ export interface TaskBoardItem {
   projectId: string
   title: string
   status: TaskStatus
+  orchestrationStatus?: TaskOrchestrationStatus
   preferredWorkspace?: TaskBoardWorkspaceSummary
   latestAgentType?: AgentType
   hasRunningSession?: true

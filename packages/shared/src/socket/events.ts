@@ -29,6 +29,7 @@ export const ServerEvents = {
   SESSION_PERMISSION_INVALIDATED: 'session:permission_invalidated',
   SESSION_RUNTIME_STATE_CHANGED: 'session:runtime_state_changed',
   TASK_UPDATED: 'task:updated',
+  TASK_ORCHESTRATION_UPDATED: 'task:orchestration_updated',
   TASK_DELETED: 'task:deleted',
   AGENT_STATUS_CHANGED: 'agent:status_changed',
   // Standalone terminal events (server -> client)
@@ -141,6 +142,13 @@ export interface TaskUpdatedPayload {
   taskId: string;
   projectId: string;
   status: string;
+}
+
+export interface TaskOrchestrationUpdatedPayload {
+  taskId: string;
+  projectId: string;
+  status: string;
+  previousStatus?: string;
 }
 
 export interface TaskDeletedPayload {

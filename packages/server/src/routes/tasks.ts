@@ -2,11 +2,13 @@ import type { FastifyInstance } from 'fastify';
 import { z, ZodError } from 'zod';
 import { TaskService } from '../services/task.service.js';
 import { TaskStatus } from '../types/index.js';
+import { TaskOrchestrationStatus } from '@agent-tower/shared';
 import { ServiceError } from '../errors.js';
 import {
   getEventBus,
   getSessionManager,
   getTaskCleanupService,
+  getTaskOrchestrationService,
   getWorkspaceBackgroundService,
 } from '../core/container.js';
 
@@ -47,6 +49,27 @@ const taskBoardQuerySchema = taskListQuerySchema.extend({
   limit: z.coerce.number().int().min(1).max(1000).default(1000),
 });
 
+const addDependencySchema = z.object({
+  dependsOnTaskId: z.string().uuid('dependsOnTaskId must be a valid task id'),
+});
+
+const orchestrationWorkerSchema = z.object({
+  workerId: z.string().min(1, 'workerId is required').max(200),
+});
+
+const orchestrationTransitionSchema = z.object({
+  status: z.nativeEnum(TaskOrchestrationStatus),
+  workerId: z.string().min(1).max(200).optional(),
+  actorType: z.string().min(1).max(100).optional(),
+  actorId: z.string().min(1).max(200).optional(),
+  reason: z.string().max(2_000).optional(),
+});
+
+const taskEventsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).default(200),
+  after: z.string().datetime().optional(),
+});
+
 /**
  * 统一错误处理：将 ServiceError / ZodError 转为结构化响应
  */
@@ -77,6 +100,7 @@ export async function taskRoutes(app: FastifyInstance) {
     getTaskCleanupService(),
     getWorkspaceBackgroundService(),
   );
+  const orchestrationService = getTaskOrchestrationService();
 
   app.get('/task-board', async (request, reply) => {
     try {
@@ -98,6 +122,32 @@ export async function taskRoutes(app: FastifyInstance) {
         return handleError(error, reply);
       }
     }
+  );
+
+  app.get<{ Params: { projectId: string } }>(
+    '/projects/:projectId/tasks/ready',
+    async (request, reply) => {
+      try {
+        const query = z.object({
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+        }).parse(request.query);
+        return await orchestrationService.listReadyTasks(request.params.projectId, query.limit);
+      } catch (error) {
+        return handleError(error, reply);
+      }
+    },
+  );
+
+  app.post<{ Params: { projectId: string } }>(
+    '/projects/:projectId/tasks/claim-next',
+    async (request, reply) => {
+      try {
+        const body = orchestrationWorkerSchema.parse(request.body);
+        return await orchestrationService.claimNext(body.workerId, request.params.projectId);
+      } catch (error) {
+        return handleError(error, reply);
+      }
+    },
   );
 
   // 创建任务
@@ -139,6 +189,99 @@ export async function taskRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>('/tasks/:id/body', async (request, reply) => {
     try {
       return await taskService.findBodyById(request.params.id);
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>('/tasks/:id/dependencies', async (request, reply) => {
+    try {
+      return await orchestrationService.listDependencies(request.params.id);
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/tasks/:id/dependencies', async (request, reply) => {
+    try {
+      const body = addDependencySchema.parse(request.body);
+      const dependency = await orchestrationService.addDependency(
+        request.params.id,
+        body.dependsOnTaskId,
+      );
+      reply.code(201);
+      return dependency;
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
+  app.delete<{ Params: { id: string; dependsOnTaskId: string } }>(
+    '/tasks/:id/dependencies/:dependsOnTaskId',
+    async (request, reply) => {
+      try {
+        await orchestrationService.removeDependency(
+          request.params.id,
+          request.params.dependsOnTaskId,
+        );
+        reply.code(204);
+        return;
+      } catch (error) {
+        return handleError(error, reply);
+      }
+    },
+  );
+
+  app.get<{ Params: { id: string } }>('/tasks/:id/readiness', async (request, reply) => {
+    try {
+      return await orchestrationService.getReadiness(request.params.id);
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>('/tasks/:id/events', async (request, reply) => {
+    try {
+      const query = taskEventsQuerySchema.parse(request.query);
+      return await orchestrationService.listEvents(request.params.id, {
+        limit: query.limit,
+        after: query.after ? new Date(query.after) : undefined,
+      });
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/tasks/:id/orchestration/ready', async (request, reply) => {
+    try {
+      return await orchestrationService.markReady(request.params.id);
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/tasks/:id/orchestration/claim', async (request, reply) => {
+    try {
+      const body = orchestrationWorkerSchema.parse(request.body);
+      return await orchestrationService.claim(request.params.id, body.workerId);
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/tasks/:id/orchestration/heartbeat', async (request, reply) => {
+    try {
+      const body = orchestrationWorkerSchema.parse(request.body);
+      return await orchestrationService.heartbeat(request.params.id, body.workerId);
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>('/tasks/:id/orchestration', async (request, reply) => {
+    try {
+      const body = orchestrationTransitionSchema.parse(request.body);
+      return await orchestrationService.transition(request.params.id, body.status, body);
     } catch (error) {
       return handleError(error, reply);
     }

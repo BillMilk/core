@@ -15,6 +15,7 @@ import {
   getEventBus,
   getSessionManager,
   getTaskCleanupService,
+  getTaskOrchestrationScheduler,
   getWorkspaceBackgroundService,
 } from './core/container.js';
 import { tunnelAuthHook } from './middleware/tunnel-auth.js';
@@ -134,6 +135,11 @@ export async function buildApp() {
     getTaskCleanupService().start();
     app.log.info(`[startup:onReady] taskCleanupService started elapsed=${elapsed()}`);
 
+    // 启动任务编排租约恢复 worker
+    app.log.info(`[startup:onReady] taskOrchestrationScheduler start elapsed=${elapsed()}`);
+    getTaskOrchestrationScheduler().start();
+    app.log.info(`[startup:onReady] taskOrchestrationScheduler started elapsed=${elapsed()}`);
+
     app.log.info(`[startup:onReady] complete elapsed=${elapsed()}`);
   });
 
@@ -142,6 +148,7 @@ export async function buildApp() {
     hibernationScheduler?.stop();
     memberHeartbeatScheduler?.stop();
     getTaskCleanupService().stop();
+    getTaskOrchestrationScheduler().stop();
     TunnelService.stop();
     try {
       await getWorkspaceBackgroundService().shutdown();

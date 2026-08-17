@@ -18,6 +18,7 @@ export {
   type SessionSubscribedPayload,
   type SessionUnsubscribedPayload,
   type TaskUpdatedPayload,
+  type TaskOrchestrationUpdatedPayload,
   type TaskDeletedPayload,
   type TerminalInputPayload,
   type TerminalResizePayload,

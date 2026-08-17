@@ -35,6 +35,7 @@ import { RuntimeType, supportsAgentRuntime, type RuntimeStateDto } from '@agent-
 import { getProviderRuntimeType } from '../executors/providers.js';
 import { appendAgentOutputIntentInstructions } from '../prompts/agent-output-intents.js';
 import { AgentArtifactService } from './agent-artifact.service.js';
+import { appendTaskEvent } from './task-orchestration.service.js';
 import {
   CliRuntimeDriver,
   AcpRuntimeDriver,
@@ -1164,7 +1165,22 @@ export class SessionManager {
       if (allDone && allSessions.length > 0) {
         await prisma.task.update({
           where: { id: task.id },
-          data: { status: TaskStatus.IN_REVIEW },
+          data: {
+            status: TaskStatus.IN_REVIEW,
+            orchestrationStatus: 'REVIEW',
+            orchestrationClaimedBy: null,
+            orchestrationClaimedAt: null,
+            orchestrationHeartbeatAt: null,
+          },
+        });
+
+        await appendTaskEvent({
+          taskId: task.id,
+          projectId: task.projectId,
+          type: 'task.status_changed',
+          fromStatus: task.orchestrationStatus,
+          toStatus: 'REVIEW',
+          payload: { reason: 'all_sessions_terminal' },
         });
 
         this.eventBus.emit('task:updated', {
@@ -1224,7 +1240,21 @@ export class SessionManager {
 
       await prisma.task.update({
         where: { id: task.id },
-        data: { status: TaskStatus.IN_PROGRESS },
+        data: {
+          status: TaskStatus.IN_PROGRESS,
+          orchestrationStatus: 'RUNNING',
+          orchestrationAttemptCount: { increment: 1 },
+          orchestrationLastError: null,
+        },
+      });
+
+      await appendTaskEvent({
+        taskId: task.id,
+        projectId: task.projectId,
+        type: 'task.started',
+        fromStatus: task.orchestrationStatus,
+        toStatus: 'RUNNING',
+        payload: { reason: 'session_started', sessionId },
       });
 
       this.eventBus.emit('task:updated', {

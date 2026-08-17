@@ -13,6 +13,7 @@ import type { WorkspaceBackgroundService } from './workspace-background-service.
 import { defaultWorkspaceLifecycleBarrier } from './workspace-lifecycle-barrier.js';
 import { ensureProjectIsMutable, getStoredProjectGitCapability } from './project-guards.js';
 import { defaultTeamLockService } from './team-lock.service.js';
+import { appendTaskEvent } from './task-orchestration.service.js';
 import type { TaskBoardItem, TaskBoardResponse } from '@agent-tower/shared';
 import prismaPkg from '@prisma/client';
 
@@ -422,6 +423,7 @@ export class TaskService {
           projectId: true,
           title: true,
           status: true,
+          orchestrationStatus: true,
           position: true,
           updatedAt: true,
         },
@@ -516,6 +518,7 @@ export class TaskService {
         projectId: task.projectId,
         title: titlePreview,
         status: task.status as TaskStatus,
+        orchestrationStatus: task.orchestrationStatus as import('@agent-tower/shared').TaskOrchestrationStatus,
         ...(preferredWorkspace ? {
           preferredWorkspace: {
             ...(preferredWorkspace.workspaceKind === WorkspaceKind.MAIN_DIRECTORY
@@ -580,6 +583,7 @@ export class TaskService {
           projectId: true,
           title: true,
           status: true,
+          orchestrationStatus: true,
           priority: true,
           position: true,
           createdAt: true,
@@ -626,6 +630,7 @@ export class TaskService {
         project: true,
         title: true,
         status: true,
+        orchestrationStatus: true,
         priority: true,
         position: true,
         createdAt: true,
@@ -714,6 +719,13 @@ export class TaskService {
         projectId,
       },
     });
+    await this.recordTaskEvent({
+      taskId: created.id,
+      projectId: created.projectId,
+      type: 'task.created',
+      toStatus: created.orchestrationStatus,
+      payload: { title: created.title },
+    });
 
     return {
       ...created,
@@ -741,6 +753,12 @@ export class TaskService {
     const updated = await prisma.task.update({
       where: { id },
       data: normalizedInput,
+    });
+    await this.recordTaskEvent({
+      taskId: updated.id,
+      projectId: updated.projectId,
+      type: 'task.updated',
+      payload: normalizedInput,
     });
 
     return {
@@ -793,6 +811,14 @@ export class TaskService {
       },
     });
 
+    await this.recordTaskEvent({
+      taskId: updated.id,
+      projectId: updated.projectId,
+      type: 'task.status_changed',
+      fromStatus: currentStatus,
+      toStatus: status,
+    });
+
     // 通知前端
     this.emitTaskUpdated(id, task.projectId, status);
 
@@ -836,6 +862,13 @@ export class TaskService {
     // 如果状态发生了变化，通知前端
     if (status && status !== task.status) {
       this.emitTaskUpdated(id, task.projectId, status);
+      void this.recordTaskEvent({
+        taskId: updated.id,
+        projectId: updated.projectId,
+        type: 'task.status_changed',
+        fromStatus: task.status,
+        toStatus: status,
+      });
     }
 
     return {
@@ -1103,7 +1136,23 @@ export class TaskService {
     // 重置 Task 到 TODO
     const updated = await prisma.task.update({
       where: { id },
-      data: { status: TaskStatus.TODO },
+      data: {
+        status: TaskStatus.TODO,
+        orchestrationStatus: 'BACKLOG',
+        orchestrationClaimedBy: null,
+        orchestrationClaimedAt: null,
+        orchestrationHeartbeatAt: null,
+        orchestrationLastError: null,
+      },
+    });
+
+    await this.recordTaskEvent({
+      taskId: updated.id,
+      projectId: updated.projectId,
+      type: 'task.released',
+      fromStatus: task.orchestrationStatus,
+      toStatus: 'BACKLOG',
+      payload: { reason: 'task_retry' },
     });
 
     this.emitTaskUpdated(id, task.projectId, TaskStatus.TODO);
@@ -1124,5 +1173,18 @@ export class TaskService {
    */
   emitTaskUpdated(taskId: string, projectId: string, status: string): void {
     this.eventBus.emit('task:updated', { taskId, projectId, status });
+  }
+
+  private async recordTaskEvent(input: Parameters<typeof appendTaskEvent>[0]): Promise<void> {
+    try {
+      await appendTaskEvent(input);
+    } catch (error) {
+      // Event persistence must not make an already-successful board mutation
+      // fail. The orchestration state itself remains the source of truth.
+      console.warn(
+        '[TaskService] Failed to append task event:',
+        error instanceof Error ? error.message : error,
+      );
+    }
   }
 }

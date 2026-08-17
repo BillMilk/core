@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const taskCleanupStartMock = vi.fn()
 const taskCleanupStopMock = vi.fn()
+const taskOrchestrationStartMock = vi.fn()
+const taskOrchestrationStopMock = vi.fn()
 const memberHeartbeatStartMock = vi.fn()
 const memberHeartbeatStopMock = vi.fn()
 const backgroundReconcileMock = vi.fn(async () => {})
@@ -31,6 +33,10 @@ vi.mock('./core/container.js', () => ({
   getTaskCleanupService: vi.fn(() => ({
     start: taskCleanupStartMock,
     stop: taskCleanupStopMock,
+  })),
+  getTaskOrchestrationScheduler: vi.fn(() => ({
+    start: taskOrchestrationStartMock,
+    stop: taskOrchestrationStopMock,
   })),
   getWorkspaceBackgroundService: vi.fn(() => ({
     reconcile: backgroundReconcileMock,
@@ -76,6 +82,8 @@ describe('buildApp static web hosting', () => {
     tempWebDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-tower-web-'))
     taskCleanupStartMock.mockClear()
     taskCleanupStopMock.mockClear()
+    taskOrchestrationStartMock.mockClear()
+    taskOrchestrationStopMock.mockClear()
     backgroundReconcileMock.mockClear()
     backgroundShutdownMock.mockClear()
   })
@@ -136,6 +144,8 @@ describe('buildApp startup services', () => {
     delete process.env.AGENT_TOWER_WEB_DIR
     taskCleanupStartMock.mockClear()
     taskCleanupStopMock.mockClear()
+    taskOrchestrationStartMock.mockClear()
+    taskOrchestrationStopMock.mockClear()
   })
 
   afterEach(() => {
@@ -151,8 +161,10 @@ describe('buildApp startup services', () => {
 
     await expect(app.ready()).resolves.toBe(app)
     expect(taskCleanupStartMock).toHaveBeenCalledTimes(1)
+    expect(taskOrchestrationStartMock).toHaveBeenCalledTimes(1)
 
     await app.close()
     expect(taskCleanupStopMock).toHaveBeenCalledTimes(1)
+    expect(taskOrchestrationStopMock).toHaveBeenCalledTimes(1)
   })
 })
