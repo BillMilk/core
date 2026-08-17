@@ -10,9 +10,12 @@ import {
   rmSync,
 } from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { patchClaudeAgentAcp } from '../../server/scripts/patch-claude-agent-acp.mjs';
+
+const require = createRequire(import.meta.url);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(__dirname, '..');
@@ -72,6 +75,42 @@ if (process.platform !== 'win32') {
 requirePath(nodeRuntimePath, 'Node runtime');
 
 run('pnpm', ['--filter', '@agent-tower/server', '--config.node-linker=hoisted', 'deploy', '--legacy', '--prod', serverRuntimeDir]);
+
+// `pnpm deploy --legacy` can resolve a different Prisma patch release from the
+// workspace package ranges. The generated client below comes from the
+// workspace, so copy the matching Prisma packages into the runtime as well;
+// otherwise the runtime library and generated client can disagree and fail
+// during startup.
+function resolveWorkspacePackage(packageName, fromPath) {
+  return path.dirname(realpathSync(
+    require.resolve(`${packageName}/package.json`, { paths: [fromPath] }),
+  ));
+}
+
+function replaceRuntimePackageFromWorkspace(packageName, fromPath) {
+  const workspacePackage = resolveWorkspacePackage(packageName, fromPath);
+  const runtimePackage = path.join(serverRuntimeDir, 'node_modules', packageName);
+  rmSync(runtimePackage, { recursive: true, force: true });
+  mkdirSync(path.dirname(runtimePackage), { recursive: true });
+  cpSync(workspacePackage, runtimePackage, {
+    recursive: true,
+    dereference: true,
+  });
+}
+
+const workspaceServerPackage = path.join(monorepoRoot, 'packages/server');
+const workspacePrismaPackage = resolveWorkspacePackage('prisma', workspaceServerPackage);
+replaceRuntimePackageFromWorkspace('prisma', workspaceServerPackage);
+replaceRuntimePackageFromWorkspace('@prisma/client', workspaceServerPackage);
+for (const packageName of [
+  '@prisma/engines',
+  '@prisma/engines-version',
+  '@prisma/fetch-engine',
+  '@prisma/get-platform',
+  '@prisma/debug',
+]) {
+  replaceRuntimePackageFromWorkspace(packageName, workspacePrismaPackage);
+}
 
 const selfWorkspaceLink = path.join(serverRuntimeDir, 'node_modules/.pnpm/node_modules/@agent-tower/server');
 rmSync(selfWorkspaceLink, { recursive: true, force: true });
