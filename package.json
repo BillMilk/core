@@ -11,6 +11,7 @@
     "dev:all": "pnpm -r --parallel run dev",
     "desktop:spike": "pnpm --filter @agent-tower/desktop spike",
     "desktop:package:dir": "pnpm --filter @agent-tower/desktop package:dir",
+    "desktop:package:win:dir": "corepack pnpm --filter @agent-tower/desktop package:win:dir",
     "desktop:package:acceptance": "pnpm --filter @agent-tower/desktop package:acceptance",
     "desktop:package:smoke": "pnpm --filter @agent-tower/desktop package:smoke",
     "build": "pnpm -r run build",

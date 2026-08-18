@@ -163,11 +163,12 @@ async function resolveNativeExecutable(
     if (resolved) return resolved;
   }
   for (const command of options.executableCandidates) {
-    const executable = process.platform === 'win32' && !path.extname(command) ? `${command}.cmd` : command;
-    const resolved = await which(executable, { env: environment });
+    // Let the shared resolver apply PATHEXT semantics. Forcing `.cmd` here
+    // hides native Windows executables such as Grok's `grok.exe`.
+    const resolved = await which(command, { env: environment });
     if (resolved) return resolved;
   }
-  const home = environment.HOME;
+  const home = environment.HOME || environment.USERPROFILE;
   if (home) {
     for (const segments of options.homeRelativeCandidates ?? []) {
       const candidate = path.join(home, ...segments);

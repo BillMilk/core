@@ -43,6 +43,12 @@ Build the current-platform unpacked desktop app:
 pnpm desktop:package:dir
 ```
 
+For a Windows x64 `win-unpacked` directory specifically, follow
+[`docs/WINDOWS_WIN_UNPACKED_BUILD.md`](../../docs/WINDOWS_WIN_UNPACKED_BUILD.md)
+or run `pnpm desktop:package:win:dir` from the repository root. This directory
+build is different from `package:win`, which generates NSIS and portable
+artifacts.
+
 Build installer packages:
 
 ```bash

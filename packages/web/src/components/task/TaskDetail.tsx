@@ -14,6 +14,7 @@ import {
 import { LogStream } from '@/components/agent'
 import { TodoPanel } from '@/components/agent'
 import { TokenUsageIndicator } from '@/components/agent'
+import { RuntimeObservabilityBar } from '@/components/agent'
 import { RuntimePermissionPrompt } from '@/components/agent'
 import { IconRunning, IconReview, IconPending, IconDone, IconCancelled } from '@/components/agent'
 import { Paperclip, ArrowUp, ArrowDown, ArrowLeft, Play, Square, Code2, Trash2, MoreVertical, RotateCcw, Plus } from 'lucide-react'
@@ -450,7 +451,11 @@ export function TaskDetail({ task, onDeleteTask, isDeleting, onTaskStatusChange,
       handleOpenVisualization(displayedSessionId, file, displayedSessionWorkspaceId)
     }
   }, [displayedSessionId, displayedSessionWorkspaceId, handleOpenVisualization])
-  const { isActive: isSessionActive, isCancelling: isSessionCancelling } = useSessionActivity(
+  const {
+    runtimeState,
+    isActive: isSessionActive,
+    isCancelling: isSessionCancelling,
+  } = useSessionActivity(
     displayedSessionId ?? '',
     displayedSession?.status,
   )
@@ -1145,6 +1150,17 @@ export function TaskDetail({ task, onDeleteTask, isDeleting, onTaskStatusChange,
                     </Button>
                   </div>
                 </div>
+                <RuntimeObservabilityBar
+                  compact
+                  agentType={displayedSession?.agentType}
+                  runtimeType={displayedSession?.runtimeType}
+                  sessionStatus={displayedSession?.status}
+                  runtimeState={runtimeState}
+                  logs={logs}
+                  usage={tokenUsage}
+                  sessionStartedAt={displayedSession?.startedAt}
+                  sessionEndedAt={displayedSession?.endedAt}
+                />
                 <div className="relative flex-1 min-h-0">
                   <div ref={scrollRef} className="h-full overflow-y-auto scrollbar-app-thin px-6 pt-6 pb-4">
                     <div ref={contentRef} className="w-full max-w-4xl mx-auto">
@@ -1213,6 +1229,18 @@ export function TaskDetail({ task, onDeleteTask, isDeleting, onTaskStatusChange,
             )
           ) : (
             <>
+          {logSessionId ? (
+            <RuntimeObservabilityBar
+              agentType={displayedSession?.agentType}
+              runtimeType={displayedSession?.runtimeType}
+              sessionStatus={displayedSession?.status}
+              runtimeState={runtimeState}
+              logs={logs}
+              usage={tokenUsage}
+              sessionStartedAt={displayedSession?.startedAt}
+              sessionEndedAt={displayedSession?.endedAt}
+            />
+          ) : null}
           {/* Scrollable Logs */}
           <div className="relative flex-1 min-h-0">
             <div ref={scrollRef} className="h-full overflow-y-auto scrollbar-app-thin px-6 pt-6 pb-4">

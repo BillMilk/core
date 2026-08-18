@@ -5,6 +5,7 @@ import { SessionStatus, type RuntimeType } from '@agent-tower/shared'
 import { LogStream } from './LogStream'
 import { TodoPanel } from './TodoPanel'
 import { TokenUsageIndicator } from './TokenUsageBar'
+import { RuntimeObservabilityBar } from './RuntimeObservabilityBar'
 import { RuntimePermissionPrompt } from './RuntimePermissionPrompt'
 import { ProviderSelector } from '@/components/task/ProviderSelector'
 import { AttachmentPreview } from '@/components/ui/AttachmentPreview'
@@ -105,7 +106,11 @@ export function AgentSessionPanel({
     isUploading,
   } = useAttachments()
 
-  const { isActive: isSessionActive, isCancelling: isSessionCancelling } = useSessionActivity(sessionId, sessionStatus)
+  const {
+    runtimeState,
+    isActive: isSessionActive,
+    isCancelling: isSessionCancelling,
+  } = useSessionActivity(sessionId, sessionStatus)
   const canStopSession = canStop ?? isSessionActive
 
   useEffect(() => {
@@ -228,6 +233,16 @@ export function AgentSessionPanel({
 
   return (
     <div className={cn('relative flex min-h-0 flex-1 flex-col bg-background', className)}>
+      <RuntimeObservabilityBar
+        agentType={agentType}
+        runtimeType={runtimeType}
+        sessionStatus={sessionStatus}
+        runtimeState={runtimeState}
+        logs={logs}
+        usage={tokenUsage}
+        sessionStartedAt={sessionStartedAt}
+        sessionEndedAt={sessionEndedAt}
+      />
       <div className="relative min-h-0 flex-1">
         <div ref={scrollRef} className="h-full overflow-y-auto scrollbar-app-thin px-6 pb-4 pt-6">
           <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-4xl">

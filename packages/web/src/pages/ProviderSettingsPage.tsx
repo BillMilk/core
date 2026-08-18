@@ -244,7 +244,7 @@ function getProviderAgentOption(agentType: AgentType | string, runtimeType?: Run
 
 function getProviderAgentLabel(agentType: AgentType | string, runtimeType?: RuntimeType): string {
   const label = getAgentLabel(agentType)
-  return runtimeType === RuntimeType.ACP ? `${label} (ACP)` : label
+  return runtimeType === RuntimeType.ACP ? `${label} (CLI · ACP)` : `${label} (CLI)`
 }
 
 function parseProviderAgentOption(value: string): { agentType: AgentType; runtimeType: RuntimeType } {

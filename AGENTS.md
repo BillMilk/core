@@ -137,3 +137,10 @@ pnpm --filter @agent-tower/shared build          # 仅共享包构建
 - Socket 事件使用常量定义，避免魔法字符串
 - React 组件使用函数式组件 + Hooks
 - 导出路径: `@agent-tower/shared`, `@agent-tower/shared/socket`, `@agent-tower/shared/types`, `@agent-tower/shared/log-adapter`, `@agent-tower/shared/dev-port`
+
+## Windows Electron 目录版打包
+
+- 当用户要求 `win-unpacked`、目录版或“不要安装包/便携版”时，必须阅读并遵循 `docs/WINDOWS_WIN_UNPACKED_BUILD.md`。
+- 首选命令是 `pnpm desktop:package:win:dir`，产物为 `packages/desktop/release/win-unpacked/`。
+- 不要使用 `pnpm --filter @agent-tower/desktop package:win`；该命令会生成 NSIS 安装包和 portable 单文件。
+- 交付前必须运行 `pnpm desktop:package:smoke`，并确认用户需要保留整个 `win-unpacked` 目录，不能只复制其中的 EXE。

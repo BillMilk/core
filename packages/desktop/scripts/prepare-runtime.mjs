@@ -38,6 +38,15 @@ function run(command, args) {
   }
 }
 
+function runPnpm(args) {
+  const npmExecPath = process.env.npm_execpath;
+  if (npmExecPath && existsSync(npmExecPath) && /pnpm(?:\.c?m?js)?$/i.test(npmExecPath)) {
+    run(process.execPath, [npmExecPath, ...args]);
+    return;
+  }
+  run('corepack', ['pnpm', ...args]);
+}
+
 function requirePath(target, label) {
   if (!existsSync(target)) {
     throw new Error(`Missing ${label}: ${path.relative(monorepoRoot, target)}`);
@@ -74,7 +83,7 @@ if (process.platform !== 'win32') {
 }
 requirePath(nodeRuntimePath, 'Node runtime');
 
-run('pnpm', ['--filter', '@agent-tower/server', '--config.node-linker=hoisted', 'deploy', '--legacy', '--prod', serverRuntimeDir]);
+runPnpm(['--filter', '@agent-tower/server', '--config.node-linker=hoisted', 'deploy', '--legacy', '--prod', serverRuntimeDir]);
 
 // `pnpm deploy --legacy` can resolve a different Prisma patch release from the
 // workspace package ranges. The generated client below comes from the

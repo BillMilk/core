@@ -111,7 +111,7 @@
     },
     {
       "id": "opencode-acp-default",
-      "name": "OpenCode (ACP)",
+      "name": "OpenCode (Local CLI via ACP)",
       "agentType": "OPENCODE",
       "runtimeType": "ACP",
       "env": {},
@@ -131,7 +131,7 @@
     },
     {
       "id": "grok-build-acp-default",
-      "name": "Grok Build (ACP)",
+      "name": "Grok Build (Local CLI via ACP)",
       "agentType": "GROK_BUILD",
       "runtimeType": "ACP",
       "env": {},

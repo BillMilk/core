@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
 import {
   createIsolatedDesktopTestEnv,
   findPackagedAppExecutable,
@@ -128,6 +130,16 @@ const isolated = createIsolatedDesktopTestEnv({
   },
 });
 
+if (
+  process.platform === 'win32'
+  && process.env.AGENT_TOWER_DESKTOP_VERIFY_GIT_INIT === '1'
+  && process.env.AGENT_TOWER_DESKTOP_TEST_STALE_PATH === '1'
+) {
+  isolated.env.PATH = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
+  delete isolated.env.Path;
+  console.log(`[desktop:smoke] Simulating stale GUI PATH=${isolated.env.PATH}`);
+}
+
 console.log(`[desktop:smoke] Starting ${executable}`);
 console.log(`[desktop:smoke] HOME=${isolated.tempHome}`);
 console.log(`[desktop:smoke] userData=${isolated.tempUserData}`);
@@ -190,6 +202,68 @@ try {
     throw new Error(`Packaged MCP config does not point at bundled MCP entry: ${mcpConfig.args?.[0]}`);
   }
   console.log('[desktop:smoke] MCP config verification passed');
+
+  if (process.env.AGENT_TOWER_DESKTOP_VERIFY_GIT_INIT === '1') {
+    const repoPath = path.join(isolated.tempHome, 'new-project');
+    mkdirSync(repoPath, { recursive: true });
+    const project = await fetchJson(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: `Packaged Git Init ${Date.now()}`,
+        repoPath,
+        mainBranch: 'main',
+        initEmptyRepo: true,
+      }),
+    }, 30_000);
+    if (!project?.id || !existsSync(path.join(repoPath, '.git'))) {
+      throw new Error('Packaged project creation did not initialize a Git repository');
+    }
+    console.log('[desktop:smoke] Git init verification passed with packaged backend');
+  }
+
+  const expectedAgentCli = process.env.AGENT_TOWER_DESKTOP_VERIFY_AGENT_CLI;
+  if (expectedAgentCli) {
+    const agentCliStatus = await fetchJson(`${baseUrl}/api/agent-cli/status/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    }, 30_000);
+    const tool = agentCliStatus.tools?.find((item) => item.toolId === expectedAgentCli);
+    if (tool?.installStatus !== 'installed') {
+      throw new Error(
+        `Expected packaged app to detect ${expectedAgentCli}, got ${tool?.installStatus ?? 'no status'}`,
+      );
+    }
+    console.log(
+      `[desktop:smoke] Agent CLI verification passed: ${expectedAgentCli} ${tool.version ?? 'unknown version'}`,
+    );
+  }
+
+  const expectedProviders = process.env.AGENT_TOWER_DESKTOP_VERIFY_PROVIDERS
+    ?.split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  if (expectedProviders?.length) {
+    const providers = await fetchJson(`${baseUrl}/api/providers`, {}, 30_000);
+    for (const expected of expectedProviders) {
+      const [agentType, expectedRuntime = 'CLI'] = expected.split(':');
+      const item = providers.find(candidate => (
+        candidate.provider?.agentType === agentType
+        && (candidate.provider?.runtimeType ?? 'CLI') === expectedRuntime
+      ));
+      if (!item) {
+        throw new Error(`Expected packaged Provider ${expected}, but it was not returned`);
+      }
+      if (!['LOGIN_DETECTED', 'INSTALLATION_FOUND'].includes(item.availability?.type)) {
+        throw new Error(
+          `Expected packaged Provider ${expected} to be available, got ${item.availability?.type ?? 'no status'}: ${item.availability?.error ?? ''}`,
+        );
+      }
+      console.log(`[desktop:smoke] Provider verification passed: ${expected}`);
+    }
+  }
+
   console.log('[desktop:smoke] Packaged smoke passed');
 } finally {
   await terminateAndWait(child);

@@ -138,6 +138,26 @@ beforeEach(() => {
 })
 
 describe('CreateTaskInput slash commands', () => {
+  it('does not render empty selector popovers when projects and providers are unavailable', async () => {
+    render({
+      projects: [],
+      providers: [],
+      defaultProjectId: '',
+      defaultProviderId: '',
+    })
+
+    const projectButton = Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent === 'Project') as HTMLButtonElement | undefined
+    const providerButton = Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent === 'Agent') as HTMLButtonElement | undefined
+
+    expect(projectButton?.disabled).toBe(true)
+    expect(providerButton?.disabled).toBe(true)
+    expect(projectButton?.getAttribute('aria-expanded')).toBe('false')
+    expect(providerButton?.getAttribute('aria-expanded')).toBe('false')
+    expect(container!.querySelector('[role="menu"]')).toBeNull()
+  })
+
   it('selects a slash command before submitting in task mode and uses the project directory', async () => {
     const { onSubmit } = render()
     const textarea = await setTextareaValue('/rev')

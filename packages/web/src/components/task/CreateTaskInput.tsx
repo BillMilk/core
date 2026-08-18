@@ -156,6 +156,8 @@ export function CreateTaskInput({
 
   const selectedProject = useMemo(() => projects.find(p => p.id === projectId), [projects, projectId])
   const selectedProvider = useMemo(() => providers.find(p => p.id === providerId), [providers, providerId])
+  const hasProjectOptions = projects.length > 0
+  const hasProviderOptions = providers.length > 0
   const detectedCapability = projectId ? detectedCapabilityByProjectId[projectId] : undefined
   const selectedProjectIsGitRepo = (detectedCapability?.isGitRepo ?? selectedProject?.isGitRepo) !== false
   const selectedProjectWorktreeReady = (detectedCapability?.worktreeReady ?? selectedProject?.worktreeReady) !== false
@@ -199,6 +201,14 @@ export function CreateTaskInput({
     setShowTeamConfig(false)
     setShowWorkspaceModeMenu(false)
   }, [localProjectOnly])
+
+  useEffect(() => {
+    if (!hasProjectOptions) setShowProjectMenu(false)
+  }, [hasProjectOptions])
+
+  useEffect(() => {
+    if (!hasProviderOptions) setShowProviderMenu(false)
+  }, [hasProviderOptions])
 
   useEffect(() => {
     if (localProjectOnly || isConversationMode) return
@@ -434,8 +444,10 @@ export function CreateTaskInput({
           <div className="relative" ref={projectMenuRef}>
             <button
               type="button"
-              onClick={() => { if (!isSubmitting) setShowProjectMenu(v => !v) }}
-              disabled={isSubmitting}
+              onClick={() => { if (!isSubmitting && hasProjectOptions) setShowProjectMenu(v => !v) }}
+              disabled={isSubmitting || !hasProjectOptions}
+              aria-haspopup="menu"
+              aria-expanded={hasProjectOptions && showProjectMenu}
               className={cn(
                 'flex items-center gap-1.5 px-2 h-7 rounded-md text-xs font-medium transition-colors',
                 'hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed',
@@ -448,11 +460,13 @@ export function CreateTaskInput({
                 style={{ color: selectedProject?.color ?? 'var(--muted-foreground)' }}
               />
               <span className="max-w-[120px] truncate">{selectedProject?.name ?? t('Project')}</span>
-              <ChevronDown size={12} className={cn('text-muted-foreground transition-transform', showProjectMenu && 'rotate-180')} />
+              {hasProjectOptions && (
+                <ChevronDown size={12} className={cn('text-muted-foreground transition-transform', showProjectMenu && 'rotate-180')} />
+              )}
             </button>
 
-            {showProjectMenu && (
-              <div className="absolute top-full left-0 mt-1.5 w-56 bg-popover border border-border rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.06)] py-1 max-h-[240px] overflow-y-auto z-50">
+            {showProjectMenu && hasProjectOptions && (
+              <div role="menu" className="absolute top-full left-0 mt-1.5 w-56 bg-popover border border-border rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.06)] py-1 max-h-[240px] overflow-y-auto z-50">
                 {projects.map(p => (
                   <button
                     key={p.id}
@@ -480,8 +494,10 @@ export function CreateTaskInput({
           <div className="relative" ref={providerMenuRef}>
             <button
               type="button"
-              onClick={() => { if (!isSubmitting) setShowProviderMenu(v => !v) }}
-              disabled={isSubmitting}
+              onClick={() => { if (!isSubmitting && hasProviderOptions) setShowProviderMenu(v => !v) }}
+              disabled={isSubmitting || !hasProviderOptions}
+              aria-haspopup="menu"
+              aria-expanded={hasProviderOptions && showProviderMenu}
               className={cn(
                 'flex items-center gap-1.5 px-2 h-7 rounded-md text-xs font-medium transition-colors',
                 'hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed',
@@ -490,11 +506,13 @@ export function CreateTaskInput({
             >
               <AgentLogo agentType={selectedProvider?.agentType} className="size-3.5" />
               <span className="max-w-[120px] truncate">{selectedProvider?.name ?? (isProvidersLoading ? t('Loading...') : t('Agent'))}</span>
-              <ChevronDown size={12} className={cn('text-muted-foreground transition-transform', showProviderMenu && 'rotate-180')} />
+              {hasProviderOptions && (
+                <ChevronDown size={12} className={cn('text-muted-foreground transition-transform', showProviderMenu && 'rotate-180')} />
+              )}
             </button>
 
-            {showProviderMenu && (
-              <div className="absolute top-full left-0 mt-1.5 w-56 bg-popover border border-border rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.06)] py-1 max-h-[240px] overflow-y-auto z-50">
+            {showProviderMenu && hasProviderOptions && (
+              <div role="menu" className="absolute top-full left-0 mt-1.5 w-56 bg-popover border border-border rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.06)] py-1 max-h-[240px] overflow-y-auto z-50">
                 {providers.map(p => (
                   <button
                     key={p.id}

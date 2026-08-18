@@ -12,6 +12,7 @@ import {
   buildWindowsPathWithUserBinFallbacks,
   getDefaultTerminalShell,
   getNodeRuntimeCommand,
+  findWindowsCommandOnPath,
   normalizeCommandLookupOutput,
 } from './process-launch.js'
 
@@ -52,6 +53,25 @@ function spawnWrapperWithGrandchild(childScript: string) {
 }
 
 describe('process-launch', () => {
+  it('resolves Windows npm shims by inspecting PATH when where.exe is unreliable', () => {
+    const expected = 'C:\\Users\\alice user\\AppData\\Roaming\\npm\\codex.cmd'
+    expect(findWindowsCommandOnPath(
+      'codex',
+      { PATH: 'C:\\Windows\\System32;"C:\\Users\\alice user\\AppData\\Roaming\\npm"' },
+      candidate => candidate.toLowerCase() === expected.toLowerCase(),
+    )).toBe(expected)
+  })
+
+  it('adds native Grok and OpenCode user install directories to packaged Windows PATH', () => {
+    const windowsPath = buildWindowsPathWithUserBinFallbacks({
+      PATH: 'C:\\Windows\\System32',
+      USERPROFILE: 'C:\\Users\\alice',
+    })
+
+    expect(windowsPath?.split(';')).toContain('C:\\Users\\alice\\.grok\\bin')
+    expect(windowsPath?.split(';')).toContain('C:\\Users\\alice\\.opencode\\bin')
+  })
+
   it('should add bundled node runtime env only to the PTY wrapper env', () => {
     const wrapperEnv = buildPtyWrapperEnv(
       {
@@ -332,10 +352,12 @@ describe('process-launch', () => {
       'C:\\Users\\alice\\AppData\\Local\\Programs\\Claude\\bin',
       'C:\\Users\\alice\\AppData\\Local\\Programs\\Cursor\\bin',
       'C:\\Users\\alice\\AppData\\Local\\cursor-agent',
+      'C:\\Users\\alice\\.grok\\bin',
+      'C:\\Users\\alice\\.opencode\\bin',
     ])
   })
 
-  it('should append macOS user CLI directories and discovered nvm bins', () => {
+  it.skipIf(process.platform === 'win32')('should append macOS user CLI directories and discovered nvm bins', () => {
     const home = mkdtempSync(path.join(os.tmpdir(), 'agent-tower-unix-path-'))
     const nvmBin = path.join(home, '.nvm', 'versions', 'node', 'v22.12.0', 'bin')
     mkdirSync(nvmBin, { recursive: true })

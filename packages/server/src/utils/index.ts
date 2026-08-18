@@ -3,6 +3,7 @@ import { execFile, type ExecOptions } from 'child_process';
 import { promisify } from 'util';
 import {
   normalizeCommandLookupOutput,
+  findWindowsCommandOnPath,
   withUnixUserPathFallbacks,
   withWindowsUserPathFallbacks,
 } from './process-launch.js';
@@ -61,17 +62,22 @@ export async function which(
     const platform = options.platform ?? process.platform;
     const lookupCommand = platform === 'win32' ? 'where' : 'which';
     const env = options.env ?? process.env;
+    const lookupEnv = platform === 'win32'
+      ? withWindowsUserPathFallbacks(env)
+      : platform === 'darwin' || platform === 'linux'
+        ? withUnixUserPathFallbacks(env, platform)
+        : env;
     const { stdout } = await execFileAsync(lookupCommand, [command], {
       encoding: 'utf-8',
       windowsHide: true,
-      env: platform === 'win32'
-        ? withWindowsUserPathFallbacks(env)
-        : platform === 'darwin' || platform === 'linux'
-          ? withUnixUserPathFallbacks(env, platform)
-          : env,
+      env: lookupEnv,
     });
-    return normalizeCommandLookupOutput(String(stdout ?? ''), platform);
+    return normalizeCommandLookupOutput(String(stdout ?? ''), platform)
+      ?? (platform === 'win32' ? findWindowsCommandOnPath(command, lookupEnv) : null);
   } catch {
+    if (options.platform === 'win32' || (options.platform === undefined && process.platform === 'win32')) {
+      return findWindowsCommandOnPath(command, withWindowsUserPathFallbacks(options.env ?? process.env));
+    }
     return null;
   }
 }

@@ -9,6 +9,7 @@ import net from 'node:net';
 import { promisify } from 'node:util';
 import { resolveDesktopDataMode } from './data-mode.js';
 import { redactDesktopLogText, sanitizeDesktopLogValue } from './log-redaction.js';
+import { buildFreshWindowsPath, setEnvironmentPath } from './windows-path.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -280,13 +281,23 @@ async function startBackend(): Promise<string> {
     AGENT_TOWER_MCP_ENTRY: runtimePaths.mcpEntryPath,
     AGENT_TOWER_WEB_DIR: runtimePaths.webDistPath,
   };
+  if (process.platform === 'win32') {
+    const freshWindowsPath = await buildFreshWindowsPath(env);
+    if (freshWindowsPath) {
+      setEnvironmentPath(env, freshWindowsPath);
+      log('Refreshed backend PATH from the current Windows environment registry');
+    }
+  }
   if (dataDir) {
     env.AGENT_TOWER_DATA_DIR = dataDir;
   }
   if (runtimePaths.packagedRuntime) {
     const backendNodeCommand = getBackendNodeCommand(runtimePaths);
     env.AGENT_TOWER_NODE_RUNTIME = backendNodeCommand;
-    env.PATH = [path.dirname(backendNodeCommand), env.PATH].filter(Boolean).join(path.delimiter);
+    setEnvironmentPath(
+      env,
+      [path.dirname(backendNodeCommand), env.PATH].filter(Boolean).join(path.delimiter),
+    );
     delete env.ELECTRON_RUN_AS_NODE;
   }
 

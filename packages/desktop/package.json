@@ -16,6 +16,7 @@
     "runtime:prepare": "node scripts/prepare-runtime.mjs",
     "package:prepare": "pnpm run build:deps && pnpm run build && pnpm run runtime:prepare",
     "package:dir": "pnpm run package:prepare && electron-builder --dir --publish never",
+    "package:win:dir": "corepack pnpm --filter @agent-tower/shared build && corepack pnpm --filter @agent-tower/server build && corepack pnpm --filter web build && corepack pnpm run build && corepack pnpm run runtime:prepare && node scripts/package-win-dir.mjs",
     "package:mac": "pnpm run package:prepare && electron-builder --mac dmg --arm64 --publish never",
     "package:win": "pnpm run package:prepare && electron-builder --win nsis portable --x64 --publish never",
     "package:linux": "pnpm run package:prepare && electron-builder --linux AppImage deb --x64 --publish never",
@@ -38,6 +39,7 @@
     "appId": "dev.agent-tower.desktop",
     "productName": "Agent Tower",
     "asar": true,
+    "npmRebuild": false,
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "publish": {
       "provider": "github",

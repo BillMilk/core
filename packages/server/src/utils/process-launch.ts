@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -422,6 +422,53 @@ function getWindowsPathValue(env: NodeJS.ProcessEnv): string | undefined {
   return env.PATH ?? env.Path ?? env.path;
 }
 
+const WINDOWS_EXECUTABLE_EXTENSIONS = ['.cmd', '.bat', '.exe', '.com'] as const;
+
+type FileExists = (target: string) => boolean;
+
+/**
+ * Resolve a Windows command by inspecting PATH directly.
+ *
+ * Electron GUI processes can inherit a valid user PATH while a nested
+ * `where.exe` lookup still misses npm shims. Keep this fallback shared by
+ * Provider availability checks and the Agent CLI environment page so both
+ * surfaces report the same installation state.
+ */
+export function findWindowsCommandOnPath(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  fileExists: FileExists = existsSync,
+): string | null {
+  if (command.includes('/') || command.includes('\\')) return null;
+
+  const pathValue = getWindowsPathValue(env);
+  if (!pathValue) return null;
+
+  const hasExecutableExtension = /\.(?:cmd|bat|exe|com)$/i.test(command);
+  const names = hasExecutableExtension
+    ? [command]
+    : WINDOWS_EXECUTABLE_EXTENSIONS.map(extension => `${command}${extension}`);
+
+  for (const rawDirectory of pathValue.split(';')) {
+    const trimmed = rawDirectory.trim();
+    const directory = trimmed.startsWith('"') && trimmed.endsWith('"')
+      ? trimmed.slice(1, -1)
+      : trimmed;
+    if (!directory) continue;
+
+    for (const name of names) {
+      const candidate = path.win32.join(directory, name);
+      try {
+        if (fileExists(candidate)) return candidate;
+      } catch {
+        // Ignore inaccessible PATH entries and continue with later entries.
+      }
+    }
+  }
+
+  return null;
+}
+
 export function buildWindowsPathWithUserBinFallbacks(env: NodeJS.ProcessEnv): string | undefined {
   const paths = (getWindowsPathValue(env) ?? '')
     .split(';')
@@ -438,6 +485,8 @@ export function buildWindowsPathWithUserBinFallbacks(env: NodeJS.ProcessEnv): st
   appendPath(paths, localAppData ? `${localAppData}\\Programs\\Claude\\bin` : undefined);
   appendPath(paths, localAppData ? `${localAppData}\\Programs\\Cursor\\bin` : undefined);
   appendPath(paths, localAppData ? `${localAppData}\\cursor-agent` : undefined);
+  appendPath(paths, userProfile ? `${userProfile}\\.grok\\bin` : undefined);
+  appendPath(paths, userProfile ? `${userProfile}\\.opencode\\bin` : undefined);
   appendPath(paths, appData ? `${appData}\\npm` : undefined);
 
   return paths.length > 0 ? paths.join(';') : undefined;
@@ -466,9 +515,9 @@ function appendNodeManagerPathFallbacks(paths: string[], home: string): void {
   // macOS applications because those managers are initialized by shell startup
   // files rather than the login environment inherited by Electron.
   const versionRoots = [
-    { root: path.join(home, '.nvm', 'versions', 'node'), suffix: ['bin'] },
-    { root: path.join(home, '.fnm', 'node-versions'), suffix: ['installation', 'bin'] },
-    { root: path.join(home, '.local', 'share', 'fnm', 'node-versions'), suffix: ['installation', 'bin'] },
+    { root: path.posix.join(home, '.nvm', 'versions', 'node'), suffix: ['bin'] },
+    { root: path.posix.join(home, '.fnm', 'node-versions'), suffix: ['installation', 'bin'] },
+    { root: path.posix.join(home, '.local', 'share', 'fnm', 'node-versions'), suffix: ['installation', 'bin'] },
   ];
 
   for (const { root, suffix } of versionRoots) {
@@ -480,7 +529,7 @@ function appendNodeManagerPathFallbacks(paths: string[], home: string): void {
     }
 
     for (const entry of entries) {
-      appendPath(paths, path.join(root, entry, ...suffix));
+      appendPath(paths, path.posix.join(root, entry, ...suffix));
     }
   }
 }
@@ -496,18 +545,18 @@ export function buildUnixPathWithUserBinFallbacks(
   const home = getUnixHomeDirectory(env);
 
   if (home) {
-    appendPath(paths, path.join(home, '.local', 'bin'));
-    appendPath(paths, path.join(home, '.volta', 'bin'));
-    appendPath(paths, path.join(home, '.bun', 'bin'));
-    appendPath(paths, path.join(home, '.cargo', 'bin'));
-    appendPath(paths, path.join(home, '.asdf', 'shims'));
-    appendPath(paths, path.join(home, '.npm-global', 'bin'));
-    appendPath(paths, path.join(home, '.npm-packages', 'bin'));
-    appendPath(paths, path.join(home, 'bin'));
+    appendPath(paths, path.posix.join(home, '.local', 'bin'));
+    appendPath(paths, path.posix.join(home, '.volta', 'bin'));
+    appendPath(paths, path.posix.join(home, '.bun', 'bin'));
+    appendPath(paths, path.posix.join(home, '.cargo', 'bin'));
+    appendPath(paths, path.posix.join(home, '.asdf', 'shims'));
+    appendPath(paths, path.posix.join(home, '.npm-global', 'bin'));
+    appendPath(paths, path.posix.join(home, '.npm-packages', 'bin'));
+    appendPath(paths, path.posix.join(home, 'bin'));
     if (platform === 'darwin') {
-      appendPath(paths, path.join(home, 'Library', 'pnpm'));
+      appendPath(paths, path.posix.join(home, 'Library', 'pnpm'));
     } else {
-      appendPath(paths, path.join(home, '.local', 'share', 'pnpm'));
+      appendPath(paths, path.posix.join(home, '.local', 'share', 'pnpm'));
     }
     appendNodeManagerPathFallbacks(paths, home);
   }

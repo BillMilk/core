@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import {
   buildWindowsCmdShimCommandLine,
+  findWindowsCommandOnPath,
   normalizeCommandLookupOutput,
   withUnixUserPathFallbacks,
   withWindowsUserPathFallbacks,
@@ -22,6 +24,7 @@ export type AgentCliExecFile = (
     env: NodeJS.ProcessEnv
     shell: false
     windowsHide: true
+    windowsVerbatimArguments?: true
     encoding: 'utf8'
   }
 ) => Promise<AgentCliExecFileResult>;
@@ -62,10 +65,16 @@ function hasPathSeparator(command: string): boolean {
   return command.includes('/') || command.includes('\\');
 }
 
+type AgentCliFileExists = (target: string) => boolean;
+
+// Preserve the public import used by existing Agent CLI tests and callers.
+export { findWindowsCommandOnPath };
+
 async function resolveWindowsCommand(
   command: string,
   env: NodeJS.ProcessEnv,
-  execFileImpl: AgentCliExecFile
+  execFileImpl: AgentCliExecFile,
+  fileExists: AgentCliFileExists
 ): Promise<string> {
   if (hasPathSeparator(command) || /\.(?:cmd|bat|exe)$/i.test(command)) {
     return command;
@@ -82,14 +91,24 @@ async function resolveWindowsCommand(
       encoding: 'utf8',
     });
   } catch {
+    const directMatch = findWindowsCommandOnPath(command, env, fileExists);
+    if (directMatch) return directMatch;
     throw commandMissingError(command);
   }
   const resolved = normalizeCommandLookupOutput(result.stdout, 'win32');
-  if (!resolved) throw commandMissingError(command);
+  if (!resolved) {
+    const directMatch = findWindowsCommandOnPath(command, env, fileExists);
+    if (directMatch) return directMatch;
+    throw commandMissingError(command);
+  }
   return resolved;
 }
 
-function buildWindowsCommand(command: string, args: string[], env: NodeJS.ProcessEnv): { command: string; args: string[] } {
+function buildWindowsCommand(
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv
+): { command: string; args: string[]; windowsVerbatimArguments?: true } {
   if (!/\.(?:cmd|bat)$/i.test(command)) {
     return { command, args };
   }
@@ -97,6 +116,10 @@ function buildWindowsCommand(command: string, args: string[], env: NodeJS.Proces
   return {
     command: env.ComSpec || env.COMSPEC || 'cmd.exe',
     args: ['/d', '/s', '/c', `"${buildWindowsCmdShimCommandLine(command, args)}"`],
+    // The final argument is already a complete cmd.exe command line. Without
+    // this flag Node escapes its outer quotes again, so cmd.exe tries to run a
+    // command whose name literally contains quotes.
+    windowsVerbatimArguments: true,
   };
 }
 
@@ -106,6 +129,7 @@ export async function runAgentCliCommand(
     execFileImpl?: AgentCliExecFile
     platform?: AgentCliPlatform | null
     env?: NodeJS.ProcessEnv
+    windowsFileExists?: AgentCliFileExists
   } = {}
 ): Promise<AgentCliExecFileResult> {
   const execFileImpl = options.execFileImpl ?? defaultExecFile;
@@ -123,10 +147,16 @@ export async function runAgentCliCommand(
 
   let command = spec.command;
   let args = [...spec.args];
+  let windowsVerbatimArguments: true | undefined;
 
   if (platform === 'win32') {
-    command = await resolveWindowsCommand(command, env, execFileImpl);
-    ({ command, args } = buildWindowsCommand(command, args, env));
+    command = await resolveWindowsCommand(
+      command,
+      env,
+      execFileImpl,
+      options.windowsFileExists ?? existsSync
+    );
+    ({ command, args, windowsVerbatimArguments } = buildWindowsCommand(command, args, env));
   }
 
   return execFileImpl(command, args, {
@@ -135,6 +165,7 @@ export async function runAgentCliCommand(
     env,
     shell: false,
     windowsHide: true,
+    ...(windowsVerbatimArguments ? { windowsVerbatimArguments } : {}),
     encoding: 'utf8',
   });
 }
