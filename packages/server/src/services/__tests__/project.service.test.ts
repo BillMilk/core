@@ -9,27 +9,32 @@ import { TaskStatus } from '../../types/index.js';
 
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-tower-project-service-'));
 const dbPath = path.join(testDir, 'test.db');
-process.env.AGENT_TOWER_DATABASE_URL = `file:${dbPath}`;
+fs.closeSync(fs.openSync(dbPath, 'w'));
+const databaseUrl = `file:${dbPath.replaceAll('\\', '/')}`;
+process.env.AGENT_TOWER_DATABASE_URL = databaseUrl;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const serverRoot = path.resolve(__dirname, '../../..');
 const schemaPath = path.join(serverRoot, 'prisma/schema.prisma');
+const prismaCliPath = path.join(serverRoot, 'node_modules/prisma/build/index.js');
 
 let ProjectService: typeof import('../project.service.js').ProjectService;
 let prisma: PrismaClient;
 
 describe('ProjectService', () => {
   beforeAll(async () => {
-    execFileSync(
-      'pnpm',
-      ['exec', 'prisma', 'db', 'push', '--skip-generate', `--schema=${schemaPath}`],
-      {
-        cwd: serverRoot,
-        env: { ...process.env, AGENT_TOWER_DATABASE_URL: `file:${dbPath}` },
-        stdio: 'pipe',
-      }
-    );
+    execFileSync(process.execPath, [
+      prismaCliPath,
+      'db',
+      'push',
+      '--skip-generate',
+      `--schema=${schemaPath}`,
+    ], {
+      cwd: serverRoot,
+      env: { ...process.env, AGENT_TOWER_DATABASE_URL: databaseUrl },
+      stdio: 'pipe',
+    });
 
     const serviceModule = await import('../project.service.js');
     const utilsModule = await import('../../utils/index.js');
@@ -210,6 +215,45 @@ describe('ProjectService', () => {
       isGitRepo: true,
     });
     expect(fs.existsSync(path.join(projectPath, '.git'))).toBe(true);
+  });
+
+  it('initializes a non-empty directory and commits its existing files when requested', async () => {
+    const service = new ProjectService();
+    const projectPath = fs.mkdtempSync(path.join(testDir, 'initializable-source-project-'));
+    fs.writeFileSync(path.join(projectPath, 'source.txt'), 'tracked source\n', 'utf-8');
+
+    const project = await service.create({
+      name: 'Initializable source project',
+      repoPath: projectPath,
+      initEmptyRepo: true,
+    });
+
+    expect(project).toMatchObject({
+      isGitRepo: true,
+      worktreeReady: true,
+      reason: 'READY',
+    });
+    expect(execFileSync('git', ['show', 'HEAD:source.txt'], { cwd: projectPath, encoding: 'utf-8' }))
+      .toBe('tracked source\n');
+  });
+
+  it('upgrades an existing local project so TeamRun worktrees are available', async () => {
+    const service = new ProjectService();
+    const projectPath = fs.mkdtempSync(path.join(testDir, 'upgrade-local-project-'));
+    fs.writeFileSync(path.join(projectPath, 'app.txt'), 'application source\n', 'utf-8');
+    const localProject = await service.create({
+      name: 'Upgradeable local project',
+      repoPath: projectPath,
+    });
+
+    await expect(service.initializeGit(localProject.id)).resolves.toMatchObject({
+      id: localProject.id,
+      isGitRepo: true,
+      worktreeReady: true,
+      reason: 'READY',
+    });
+    expect(execFileSync('git', ['show', 'HEAD:app.txt'], { cwd: projectPath, encoding: 'utf-8' }))
+      .toBe('application source\n');
   });
 
   it('restores an archived project to a non-git project directory', async () => {

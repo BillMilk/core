@@ -635,6 +635,7 @@ export class TaskService {
         position: true,
         createdAt: true,
         updatedAt: true,
+        teamRun: { select: { id: true } },
         workspaces: { include: { sessions: visibleSessionSummary } },
       },
     });

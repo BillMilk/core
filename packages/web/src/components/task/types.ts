@@ -5,6 +5,8 @@
  * 通过 adapters.ts 中的映射函数将后端类型转换为 UI 类型。
  */
 
+import type { TaskOrchestrationStatus } from '@agent-tower/shared'
+
 // ============ UI 状态枚举 ============
 
 /**
@@ -49,6 +51,7 @@ export interface UITask {
   projectId: string
   title: string
   status: UITaskStatus
+  orchestrationStatus?: TaskOrchestrationStatus
   /** 执行该任务的 Agent 名称（来自活跃 Session） */
   agent: string
   /** 当前工作分支（来自活跃 Workspace） */
@@ -75,6 +78,7 @@ export interface UITaskDetailData {
   projectColor: string
   title: string
   status: UITaskStatus
+  orchestrationStatus?: TaskOrchestrationStatus
   /** 当前工作分支（来自活跃 Workspace） */
   branch: string
   /** Git 操作目标基础分支（优先 workspace.baseBranch） */

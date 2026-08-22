@@ -180,11 +180,11 @@ export function useTaskBoard(options?: TaskBoardParams) {
  * 获取任务详情
  * GET /api/tasks/:id
  */
-export function useTask(id: string) {
+export function useTask(id: string, enabled = true) {
   return useQuery({
     queryKey: queryKeys.tasks.detail(id),
     queryFn: () => apiClient.get<Task>(`/tasks/${id}`),
-    enabled: !!id,
+    enabled: !!id && enabled,
   })
 }
 

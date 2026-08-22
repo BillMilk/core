@@ -14,6 +14,7 @@ export const queryKeys = {
 
   tasks: {
     all: ['tasks'] as const,
+    orchestrationAll: ['tasks', 'orchestration'] as const,
     boardAll: ['tasks', 'board'] as const,
     board: (params?: Record<string, unknown>) =>
       ['tasks', 'board', params] as const,
@@ -22,6 +23,12 @@ export const queryKeys = {
     detail: (id: string) => ['tasks', 'detail', id] as const,
     body: (id: string) => ['tasks', 'body', id] as const,
     stats: (projectId: string) => ['tasks', 'stats', projectId] as const,
+    dependencies: (id: string) => ['tasks', 'orchestration', id, 'dependencies'] as const,
+    readiness: (id: string) => ['tasks', 'orchestration', id, 'readiness'] as const,
+    events: (id: string) => ['tasks', 'orchestration', id, 'events'] as const,
+    workflows: (id: string) => ['tasks', 'orchestration', id, 'workflows'] as const,
+    dependencyCandidates: (projectId: string) =>
+      ['tasks', 'orchestration', 'candidates', projectId] as const,
   },
 
   workspaces: {

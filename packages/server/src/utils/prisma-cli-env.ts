@@ -1,8 +1,18 @@
-import { mkdirSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync } from 'node:fs';
 import path from 'node:path';
 
 export function getPrismaCacheBaseDir(dataDir: string): string {
   return path.join(dataDir, 'cache');
+}
+
+export function ensureSqliteDatabaseFile(dbPath: string): void {
+  mkdirSync(path.dirname(dbPath), { recursive: true });
+  try {
+    const descriptor = openSync(dbPath, 'wx');
+    closeSync(descriptor);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
 }
 
 export function preparePrismaCliEnv(

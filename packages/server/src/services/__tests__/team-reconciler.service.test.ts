@@ -13,16 +13,18 @@ import { EventBus } from '../../core/event-bus.js';
 import { TeamLockService } from '../team-lock.service.js';
 import type { TeamReconcilerScheduler, TeamReconcilerSessionMessenger } from '../team-reconciler.service.js';
 import type { TeamRunRouteDependencies } from '../../routes/team-runs.js';
-import type { AgentInvocation, WorkRequest } from '@agent-tower/shared';
+import { TaskOrchestrationStatus, type AgentInvocation, type WorkRequest } from '@agent-tower/shared';
 
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-tower-team-reconciler-'));
 const dbPath = path.join(testDir, 'test.db');
+fs.closeSync(fs.openSync(dbPath, 'w'));
 process.env.AGENT_TOWER_DATABASE_URL = `file:${dbPath}`;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const serverRoot = path.resolve(__dirname, '../../..');
 const schemaPath = path.join(serverRoot, 'prisma/schema.prisma');
+const prismaCliPath = path.join(serverRoot, 'node_modules/prisma/build/index.js');
 
 let prisma: PrismaClient;
 let TeamReconcilerService: typeof import('../team-reconciler.service.js').TeamReconcilerService;
@@ -342,8 +344,8 @@ describe('TeamReconcilerService', () => {
 
   beforeAll(async () => {
     execFileSync(
-      'pnpm',
-      ['exec', 'prisma', 'db', 'push', '--skip-generate', `--schema=${schemaPath}`],
+      process.execPath,
+      [prismaCliPath, 'db', 'push', '--skip-generate', `--schema=${schemaPath}`],
       {
         cwd: serverRoot,
         env: { ...process.env, AGENT_TOWER_DATABASE_URL: `file:${dbPath}` },
@@ -735,6 +737,39 @@ describe('TeamReconcilerService', () => {
     expect(taskUpdates).toEqual([
       { taskId: task.id, projectId: expect.any(String), status: TaskStatus.IN_REVIEW },
     ]);
+  });
+
+  it('keeps the TeamRun active while a workflow node is waiting for human input', async () => {
+    const { task, teamRun } = await createFixture({ taskStatus: TaskStatus.IN_PROGRESS });
+    const waitingNode = await prisma.task.create({
+      data: {
+        title: '[Workflow:fsd-1] F00 Resolve scope',
+        projectId: task.projectId,
+        status: TaskStatus.IN_PROGRESS,
+        orchestrationStatus: TaskOrchestrationStatus.WAITING_INPUT,
+      },
+    });
+    await prisma.taskEvent.create({
+      data: {
+        taskId: waitingNode.id,
+        projectId: task.projectId,
+        type: 'task.human_input_requested',
+        fromStatus: TaskOrchestrationStatus.RUNNING,
+        toStatus: TaskOrchestrationStatus.WAITING_INPUT,
+        actorType: 'TEAM_MEMBER',
+        payload: JSON.stringify({
+          rootTaskId: task.id,
+          runId: 'fsd-1',
+          nodeKey: 'F00',
+          questionId: '10000000-0000-4000-8000-000000000001',
+        }),
+      },
+    });
+
+    await expect(service.maybeAdvanceTeamRunToReview(teamRun.id)).resolves.toBe(false);
+    await expect(prisma.task.findUnique({ where: { id: task.id } })).resolves.toMatchObject({
+      status: TaskStatus.IN_PROGRESS,
+    });
   });
 
   it('cancels invocation, releases locks, starts queued work, and advances idle TeamRun on session stop', async () => {

@@ -8,6 +8,7 @@ import { AgentTowerClient } from './http-client.js';
 import { fetchContext, type McpContext } from './context.js';
 import { registerProjectTools } from './tools/projects.js';
 import { registerTaskTools } from './tools/tasks.js';
+import { registerTaskWorkflowTools } from './tools/task-workflows.js';
 import { registerProviderTools } from './tools/providers.js';
 import { registerWorkspaceTools } from './tools/workspaces.js';
 import { registerSessionTools } from './tools/sessions.js';
@@ -539,6 +540,10 @@ export async function createMcpServer(
   // 注册所有 tools
   registerProjectTools(server, client);
   registerTaskTools(server, client);
+  registerTaskWorkflowTools(server, client, context, {
+    resolveBoundTeamRunId,
+    requireCurrentActiveTeamMember,
+  });
   registerProviderTools(server, client);
   registerWorkspaceTools(server, client, context, {
     resolveBoundTeamRunId,

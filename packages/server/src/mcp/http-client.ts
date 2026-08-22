@@ -3,6 +3,8 @@
  * MCP 服务器通过此客户端代理调用后端 REST API
  */
 import type {
+  TaskWorkflowDag,
+  TaskWorkflowNodeInput,
   WorkspaceBackgroundServiceDto,
   WorkspaceBackgroundServiceInputResponse,
   WorkspaceBackgroundServiceLogsResponse,
@@ -143,6 +145,100 @@ export class AgentTowerClient {
 
   async deleteTask(taskId: string) {
     return this.request<void>('DELETE', `/api/tasks/${taskId}`);
+  }
+
+  async createTaskWorkflow(rootTaskId: string, input: { runId: string; nodes: TaskWorkflowNodeInput[] }) {
+    return this.request<TaskWorkflowDag>('POST', `/api/tasks/${rootTaskId}/workflows`, input);
+  }
+
+  async extendTaskWorkflow(rootTaskId: string, runId: string, nodes: TaskWorkflowNodeInput[]) {
+    return this.request<TaskWorkflowDag>(
+      'POST',
+      `/api/tasks/${rootTaskId}/workflows/${encodeURIComponent(runId)}/nodes`,
+      { nodes },
+    );
+  }
+
+  async getTaskWorkflow(rootTaskId: string, runId: string) {
+    return this.request<TaskWorkflowDag>(
+      'GET',
+      `/api/tasks/${rootTaskId}/workflows/${encodeURIComponent(runId)}`,
+    );
+  }
+
+  async getTaskDependencies(taskId: string) {
+    return this.request<any>('GET', `/api/tasks/${taskId}/dependencies`);
+  }
+
+  async markTaskReady(taskId: string) {
+    return this.request<any>('POST', `/api/tasks/${taskId}/orchestration/ready`, {});
+  }
+
+  async claimTask(taskId: string, workerId: string) {
+    return this.request<any>('POST', `/api/tasks/${taskId}/orchestration/claim`, { workerId });
+  }
+
+  async heartbeatTask(taskId: string, workerId: string) {
+    return this.request<any>('POST', `/api/tasks/${taskId}/orchestration/heartbeat`, { workerId });
+  }
+
+  async transitionTaskOrchestration(taskId: string, input: {
+    status: string;
+    workerId?: string;
+    actorType?: string;
+    actorId?: string;
+    reason?: string;
+  }) {
+    return this.request<any>('PATCH', `/api/tasks/${taskId}/orchestration`, input);
+  }
+
+  async completeTaskWorkflowNode(
+    rootTaskId: string,
+    runId: string,
+    taskId: string,
+    input: { actorType?: string; actorId?: string; reason?: string } = {},
+  ) {
+    return this.request<TaskWorkflowDag>(
+      'POST',
+      `/api/tasks/${rootTaskId}/workflows/${encodeURIComponent(runId)}/nodes/${taskId}/complete`,
+      input,
+    );
+  }
+
+  async requestTaskWorkflowHumanInput(
+    rootTaskId: string,
+    runId: string,
+    taskId: string,
+    input: {
+      requestKey: string;
+      question: string;
+      context?: string;
+      options?: string[];
+      allowFreeText?: boolean;
+      workerId: string;
+      actorType?: string;
+      actorId?: string;
+    },
+  ) {
+    return this.request<any>(
+      'POST',
+      `/api/tasks/${rootTaskId}/workflows/${encodeURIComponent(runId)}/nodes/${taskId}/human-input`,
+      input,
+    );
+  }
+
+  async answerTaskWorkflowHumanInput(
+    rootTaskId: string,
+    runId: string,
+    taskId: string,
+    questionId: string,
+    input: { answer: string; actorType?: string; actorId?: string },
+  ) {
+    return this.request<any>(
+      'POST',
+      `/api/tasks/${rootTaskId}/workflows/${encodeURIComponent(runId)}/nodes/${taskId}/human-input/${encodeURIComponent(questionId)}/answer`,
+      input,
+    );
   }
 
   // ── Workspaces ──
@@ -328,6 +424,10 @@ export class AgentTowerClient {
 
   async listTeamMembers(teamRunId: string) {
     return this.request<any[]>('GET', `/api/team-runs/${teamRunId}/members`);
+  }
+
+  async getTeamRun(teamRunId: string) {
+    return this.request<any>('GET', `/api/team-runs/${teamRunId}`);
   }
 
   async listMemberWorkRequests(teamRunId: string, memberId: string) {

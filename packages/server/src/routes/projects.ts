@@ -112,6 +112,15 @@ export async function projectRoutes(app: FastifyInstance) {
     }
   });
 
+  // 经用户确认后，为 Local Project 初始化 Git 并创建包含现有文件的首次提交
+  app.post<{ Params: { id: string } }>('/:id/initialize-git', async (request, reply) => {
+    try {
+      return await projectService.initializeGit(request.params.id);
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
   // 更新项目
   app.put<{ Params: { id: string } }>('/:id', async (request, reply) => {
     try {

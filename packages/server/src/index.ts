@@ -6,7 +6,7 @@ import { homedir } from 'os';
 import { buildApp } from './app.js';
 import { getDevPort } from '@agent-tower/shared/dev-port';
 import { getBundledPrismaCommand } from './utils/process-launch.js';
-import { preparePrismaCliEnv } from './utils/prisma-cli-env.js';
+import { ensureSqliteDatabaseFile, preparePrismaCliEnv } from './utils/prisma-cli-env.js';
 import { installProcessErrorLogging, writeErrorLog } from './utils/error-log.js';
 import { getOrCreateInternalApiToken, INTERNAL_API_TOKEN_ENV } from './utils/internal-api-token.js';
 
@@ -30,6 +30,7 @@ process.env[INTERNAL_API_TOKEN_ENV] = getOrCreateInternalApiToken(dataDir);
 
 // 确保数据库 schema 与当前版本一致
 const schemaPath = path.resolve(__dirname, '../prisma/schema.prisma');
+ensureSqliteDatabaseFile(dbPath);
 const prisma = getBundledPrismaCommand(__dirname);
 try {
   execFileSync(prisma.command, [...prisma.args, 'db', 'push', '--skip-generate', `--schema=${schemaPath}`], {

@@ -1,6 +1,7 @@
 export { TaskList } from './TaskList'
 export { TaskGroup } from './TaskGroup'
 export { TaskDetail } from './TaskDetail'
+export { TaskOrchestrationPanel } from './TaskOrchestrationPanel'
 export type { UITask, UIProject, UITaskDetailData, UITaskStatus } from './types'
 export { UITaskStatus as UITaskStatusEnum } from './types'
 export { mapTaskStatusToUI, adaptTaskForList, adaptTaskForDetail, adaptProject } from './adapters'

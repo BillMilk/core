@@ -1,7 +1,13 @@
 import { useState, useEffect, useMemo } from 'react'
 import { RotateCcw, Trash2, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
-import { useProjects, useUpdateProject, useArchiveProject, useRestoreProject } from '@/hooks/use-projects'
+import {
+  useArchiveProject,
+  useInitializeProjectGit,
+  useProjects,
+  useRestoreProject,
+  useUpdateProject,
+} from '@/hooks/use-projects'
 import { Button } from '@/components/ui/button'
 import { FilePathListInput } from '@/components/ui/file-path-list-input'
 import { QuickCommandsEditor } from '@/components/ui/quick-commands-editor'
@@ -48,6 +54,7 @@ export function ProjectSettingsPage() {
   const updateProject = useUpdateProject()
   const archiveProject = useArchiveProject()
   const restoreProject = useRestoreProject()
+  const initializeProjectGit = useInitializeProjectGit()
 
   const [selectedId, setSelectedId] = useState<string>('')
   const [pendingSelectedId, setPendingSelectedId] = useState<string | null>(null)
@@ -56,6 +63,7 @@ export function ProjectSettingsPage() {
   const [projectActionProjectId, setProjectActionProjectId] = useState<string | null>(null)
   const [isArchiveProjectOpen, setIsArchiveProjectOpen] = useState(false)
   const [isRestoreProjectOpen, setIsRestoreProjectOpen] = useState(false)
+  const [isInitializeGitOpen, setIsInitializeGitOpen] = useState(false)
   const [deleteProjectWithRepo, setDeleteProjectWithRepo] = useState(false)
   const [confirmDeleteProjectRepo, setConfirmDeleteProjectRepo] = useState(false)
   const [restoreProjectRepoPath, setRestoreProjectRepoPath] = useState('')
@@ -194,6 +202,17 @@ export function ProjectSettingsPage() {
     } catch { /* mutation error managed by TanStack Query */ }
   }
 
+  const handleInitializeGit = async () => {
+    if (!selected) return
+    try {
+      await initializeProjectGit.mutateAsync({ id: selected.id })
+      setIsInitializeGitOpen(false)
+      toast.success(t('Git initialized. Team mode is now available.'))
+    } catch {
+      // Mutation error is rendered in the confirmation modal.
+    }
+  }
+
   const archiveProjectName = selectedProjectForAction?.name ?? t('this project')
   const restoreRequiresRepoPath = Boolean(selectedProjectForAction?.repoDeletedAt)
   const selectedSupportsGit = selected?.isGitRepo !== false && selected?.worktreeReady !== false
@@ -281,8 +300,17 @@ export function ProjectSettingsPage() {
                   </div>
                   <p className="text-[11px] text-muted-foreground font-mono mb-5">{project.repoPath}</p>
                   {project.isGitRepo === false && (
-                    <div className="mb-5 rounded-lg border border-info/25 bg-info/8 px-3 py-2 text-xs leading-relaxed text-info/90">
-                      {t('Local projects only support local Solo tasks. Initialize Git to use worktrees and TeamRun.')}
+                    <div className="mb-5 flex flex-col gap-3 rounded-lg border border-info/25 bg-info/8 px-3 py-3 text-xs leading-relaxed text-info/90 sm:flex-row sm:items-center sm:justify-between">
+                      <span>{t('Local projects only support local Solo tasks. Initialize Git to use worktrees and TeamRun.')}</span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0"
+                        onClick={() => setIsInitializeGitOpen(true)}
+                        disabled={initializeProjectGit.isPending}
+                      >
+                        {t('Initialize Git')}
+                      </Button>
                     </div>
                   )}
 
@@ -407,6 +435,41 @@ export function ProjectSettingsPage() {
           />
         )}
       </SettingsPageContainer>
+
+      <Modal
+        isOpen={isInitializeGitOpen}
+        onClose={() => {
+          if (!initializeProjectGit.isPending) setIsInitializeGitOpen(false)
+        }}
+        title={t('Initialize Git for this project?')}
+        action={
+          <>
+            <Button
+              variant="outline"
+              onClick={() => setIsInitializeGitOpen(false)}
+              disabled={initializeProjectGit.isPending}
+            >
+              {t('Cancel')}
+            </Button>
+            <Button onClick={handleInitializeGit} disabled={initializeProjectGit.isPending}>
+              {initializeProjectGit.isPending ? t('Initializing Git...') : t('Initialize Git')}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            {t('Agent Tower will initialize Git in this directory, add files not excluded by .gitignore, and create the initial commit. Existing source files will not be modified.')}
+          </p>
+          {initializeProjectGit.isError && (
+            <p className="text-xs text-destructive">
+              {initializeProjectGit.error instanceof Error
+                ? initializeProjectGit.error.message
+                : t('Failed to initialize Git')}
+            </p>
+          )}
+        </div>
+      </Modal>
 
       {/* Archive/Delete Modal */}
       <Modal

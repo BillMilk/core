@@ -1,8 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { ZodError, z } from 'zod';
 import { ServiceError, ValidationError } from '../errors.js';
+import { getTaskOrchestrationService } from '../core/container.js';
 import { TeamRunService } from '../services/team-run.service.js';
 import { TeamSchedulerService } from '../services/team-scheduler.service.js';
+import type { TaskOrchestrationService } from '../services/task-orchestration.service.js';
 import { WorkspaceService } from '../services/workspace.service.js';
 
 type TeamRunRouteScheduler = Pick<
@@ -18,6 +20,7 @@ export interface TeamRunRouteDependencies {
   service?: TeamRunService;
   scheduler?: TeamRunRouteScheduler;
   workspaceService?: WorkspaceService;
+  orchestrationService?: Pick<TaskOrchestrationService, 'answerHumanInput'>;
 }
 
 const capabilitiesSchema = z.object({
@@ -106,6 +109,9 @@ const roomMessageSchema = z.object({
   senderId: z.string().nullable().optional(),
   senderInvocationId: z.string().nullable().optional(),
   kind: z.enum(['chat', 'work_request', 'work_started', 'artifact', 'review', 'decision', 'system']).optional(),
+});
+const humanInputAnswerSchema = z.object({
+  answer: z.string().min(1).max(20_000),
 });
 
 const privateRoomMessageSchema = z.object({
@@ -204,6 +210,7 @@ export async function teamRunRoutes(app: FastifyInstance, options: TeamRunRouteD
   const service = options.service ?? new TeamRunService();
   const scheduler = options.scheduler ?? new TeamSchedulerService();
   const workspaceService = options.workspaceService ?? new WorkspaceService();
+  const orchestrationService = options.orchestrationService ?? getTaskOrchestrationService();
 
   async function resolveViewerMemberId(teamRunId: string, request: { headers: Record<string, unknown> }) {
     const invocationId = getInvocationId(request);
@@ -419,6 +426,50 @@ export async function teamRunRoutes(app: FastifyInstance, options: TeamRunRouteD
       return handleError(error, reply);
     }
   });
+
+  app.post<{ Params: { id: string; runId: string; taskId: string; questionId: string } }>(
+    '/team-runs/:id/workflows/:runId/nodes/:taskId/human-input/:questionId/answer',
+    async (request, reply) => {
+      try {
+        const body = humanInputAnswerSchema.parse(request.body);
+        const teamRun = await service.getTeamRunById(request.params.id);
+        const controller = teamRun.members?.find((member) => (
+          member.membershipStatus === 'ACTIVE'
+          && member.queueManagementPolicy === 'team_pending'
+        ));
+        if (!controller) {
+          throw new ServiceError(
+            'The TeamRun has no active queue manager to resume this workflow',
+            'WORKFLOW_MANAGER_UNAVAILABLE',
+            409,
+          );
+        }
+        const result = await orchestrationService.answerHumanInput(
+          teamRun.taskId,
+          request.params.runId,
+          request.params.taskId,
+          request.params.questionId,
+          body.answer,
+          { actorType: 'USER' },
+        );
+        let roomMessage = null;
+        if (result.resumed) {
+          roomMessage = await service.createRoomMessage(request.params.id, {
+            content: `[Human input resolved]\nrunId: ${request.params.runId}\nnodeKey: ${result.humanInput.nodeKey}\nquestionId: ${request.params.questionId}\nQuestion: ${result.humanInput.question}\nAnswer: ${result.humanInput.answer}\nResume only this READY node; do not rerun completed nodes.`,
+            mentions: [{ memberId: controller.id, label: controller.name }],
+            senderType: 'user',
+            kind: 'decision',
+          });
+          if (teamRun.mode === 'AUTO' && (roomMessage.workRequestIds?.length ?? 0) > 0) {
+            startNextSessionsInBackground(app, scheduler, request.params.id);
+          }
+        }
+        return { ...result, roomMessage };
+      } catch (error) {
+        return handleError(error, reply);
+      }
+    },
+  );
 
   app.post<{ Params: { id: string } }>('/team-runs/:id/private-messages', async (request, reply) => {
     try {

@@ -65,6 +65,10 @@ interface RefreshProjectGitCapabilityInput {
   id: string
 }
 
+interface InitializeProjectGitInput {
+  id: string
+}
+
 // ============ Query Hooks ============
 
 /**
@@ -200,6 +204,21 @@ export function useRefreshProjectGitCapability() {
       queryClient.setQueryData(queryKeys.projects.gitCapability(variables.id), capability)
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.all })
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(variables.id) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all })
+    },
+  })
+}
+
+export function useInitializeProjectGit() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ id }: InitializeProjectGitInput) =>
+      apiClient.post<Project>(`/projects/${id}/initialize-git`, {}),
+    onSuccess: (project, variables) => {
+      queryClient.setQueryData(queryKeys.projects.detail(variables.id), project)
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects.all })
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects.gitCapability(variables.id) })
       queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all })
     },
   })

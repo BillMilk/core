@@ -1,8 +1,12 @@
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { getPrismaCacheBaseDir, preparePrismaCliEnv } from './prisma-cli-env.js';
+import {
+  ensureSqliteDatabaseFile,
+  getPrismaCacheBaseDir,
+  preparePrismaCliEnv,
+} from './prisma-cli-env.js';
 
 const tempRoots: string[] = [];
 
@@ -19,6 +23,18 @@ afterEach(() => {
 });
 
 describe('prisma-cli-env', () => {
+  it('creates a missing SQLite file without replacing an existing database', () => {
+    const dataDir = makeTempRoot();
+    const dbPath = path.join(dataDir, 'nested', 'data.db');
+
+    ensureSqliteDatabaseFile(dbPath);
+    expect(readFileSync(dbPath)).toHaveLength(0);
+
+    writeFileSync(dbPath, 'existing-database');
+    ensureSqliteDatabaseFile(dbPath);
+    expect(readFileSync(dbPath, 'utf-8')).toBe('existing-database');
+  });
+
   it('redirects Prisma CLI cache into the Agent Tower data directory', () => {
     const dataDir = makeTempRoot();
     const dbPath = path.join(dataDir, 'data.db');

@@ -29,6 +29,7 @@ import { getSessionTokenUsage, SessionReadonlyMeta } from '@/components/task/Ses
 import { ProviderSelector } from '@/components/task/ProviderSelector'
 import { SlashCommandPopover } from '@/components/task/SlashCommandPopover'
 import { DeleteTaskConfirmDialog } from '@/components/task/DeleteTaskConfirmDialog'
+import { TaskOrchestrationPanel } from '@/components/task/TaskOrchestrationPanel'
 import { WorkspaceSwitcher } from '@/components/workspace/WorkspaceSwitcher'
 import {
   canRunWorkspaceGitOperations,
@@ -801,6 +802,14 @@ export function MobileTaskDetail({ task, onBack, onDeleteTask, isDeleting, autoS
           ))}
         </div>
       </header>
+
+      <TaskOrchestrationPanel
+        taskId={task.id}
+        projectId={task.projectId}
+        orchestrationStatus={task.orchestrationStatus}
+        readOnly={isProjectReadOnly}
+        compact
+      />
 
       {/* Content Area */}
       {activeTab === 'chat' && (

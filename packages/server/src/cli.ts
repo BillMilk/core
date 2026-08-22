@@ -17,7 +17,7 @@ import type { SpawnSyncReturns } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getBundledPrismaCommand } from './utils/process-launch.js';
 import { resolveDataDir } from './utils/data-dir.js';
-import { preparePrismaCliEnv } from './utils/prisma-cli-env.js';
+import { ensureSqliteDatabaseFile, preparePrismaCliEnv } from './utils/prisma-cli-env.js';
 import { installProcessErrorLogging, writeErrorLog } from './utils/error-log.js';
 import { getOrCreateInternalApiToken, INTERNAL_API_TOKEN_ENV } from './utils/internal-api-token.js';
 
@@ -135,6 +135,7 @@ function getCommandOutput(error: unknown, key: 'stdout' | 'stderr'): string {
 
 /** 确保数据库 schema 与当前版本一致 */
 function ensureDatabase(dataDir: string, dbPath: string, schemaPath: string) {
+  ensureSqliteDatabaseFile(dbPath);
   const prisma = getBundledPrismaCommand(__dirname);
   try {
     execFileSync(prisma.command, [...prisma.args, 'db', 'push', '--skip-generate', `--schema=${schemaPath}`], {

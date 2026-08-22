@@ -63,11 +63,51 @@ const orchestrationTransitionSchema = z.object({
   actorType: z.string().min(1).max(100).optional(),
   actorId: z.string().min(1).max(200).optional(),
   reason: z.string().max(2_000).optional(),
+}).refine((value) => value.status !== TaskOrchestrationStatus.WAITING_INPUT, {
+  path: ['status'],
+  message: 'WAITING_INPUT requires the structured human-input endpoint',
 });
 
 const taskEventsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(200),
   after: z.string().datetime().optional(),
+});
+
+const workflowRunIdSchema = z.string().min(1).max(120).regex(/^[A-Za-z0-9._-]+$/);
+const workflowNodeSchema = z.object({
+  key: z.string().min(1).max(120).regex(/^[A-Za-z0-9._-]+$/),
+  title: z.string().min(1).max(300),
+  description: z.string().max(20_000).optional(),
+  role: z.string().min(1).max(200),
+  promptFile: z.string().max(1_000).optional(),
+  outputPaths: z.array(z.string().min(1).max(1_000)).max(100).optional(),
+  verifyId: z.string().max(200).optional(),
+  dependsOnKeys: z.array(z.string().min(1).max(120)).max(100).optional(),
+  priority: z.number().int().min(0).max(100).optional(),
+});
+const workflowMutationSchema = z.object({
+  runId: workflowRunIdSchema,
+  nodes: z.array(workflowNodeSchema).min(1).max(500),
+});
+const workflowCompleteSchema = z.object({
+  actorType: z.string().min(1).max(100).optional(),
+  actorId: z.string().min(1).max(200).optional(),
+  reason: z.string().max(2_000).optional(),
+});
+const workflowHumanInputRequestSchema = z.object({
+  requestKey: z.string().min(1).max(120).regex(/^[A-Za-z0-9._-]+$/),
+  question: z.string().min(1).max(4_000),
+  context: z.string().max(8_000).optional(),
+  options: z.array(z.string().min(1).max(1_000)).max(20).optional(),
+  allowFreeText: z.boolean().optional(),
+  workerId: z.string().min(1).max(200).optional(),
+  actorType: z.string().min(1).max(100).optional(),
+  actorId: z.string().min(1).max(200).optional(),
+});
+const workflowHumanInputAnswerSchema = z.object({
+  answer: z.string().min(1).max(20_000),
+  actorType: z.string().min(1).max(100).optional(),
+  actorId: z.string().min(1).max(200).optional(),
 });
 
 /**
@@ -251,6 +291,127 @@ export async function taskRoutes(app: FastifyInstance) {
       return handleError(error, reply);
     }
   });
+
+  app.post<{ Params: { rootTaskId: string } }>(
+    '/tasks/:rootTaskId/workflows',
+    async (request, reply) => {
+      try {
+        const body = workflowMutationSchema.parse(request.body);
+        const dag = await orchestrationService.createWorkflowDag(request.params.rootTaskId, body);
+        reply.code(201);
+        return dag;
+      } catch (error) {
+        return handleError(error, reply);
+      }
+    },
+  );
+
+  app.get<{ Params: { rootTaskId: string } }>(
+    '/tasks/:rootTaskId/workflows',
+    async (request, reply) => {
+      try {
+        return {
+          rootTaskId: request.params.rootTaskId,
+          workflows: await orchestrationService.listTaskWorkflows(request.params.rootTaskId),
+        };
+      } catch (error) {
+        return handleError(error, reply);
+      }
+    },
+  );
+
+  app.post<{ Params: { rootTaskId: string; runId: string } }>(
+    '/tasks/:rootTaskId/workflows/:runId/nodes',
+    async (request, reply) => {
+      try {
+        const runId = workflowRunIdSchema.parse(request.params.runId);
+        const body = z.object({ nodes: z.array(workflowNodeSchema).min(1).max(500) }).parse(request.body);
+        const dag = await orchestrationService.createWorkflowDag(request.params.rootTaskId, {
+          runId,
+          nodes: body.nodes,
+        });
+        reply.code(201);
+        return dag;
+      } catch (error) {
+        return handleError(error, reply);
+      }
+    },
+  );
+
+  app.get<{ Params: { rootTaskId: string; runId: string } }>(
+    '/tasks/:rootTaskId/workflows/:runId',
+    async (request, reply) => {
+      try {
+        const runId = workflowRunIdSchema.parse(request.params.runId);
+        return await orchestrationService.getWorkflowDag(request.params.rootTaskId, runId);
+      } catch (error) {
+        return handleError(error, reply);
+      }
+    },
+  );
+
+  app.post<{ Params: { rootTaskId: string; runId: string; taskId: string } }>(
+    '/tasks/:rootTaskId/workflows/:runId/nodes/:taskId/complete',
+    async (request, reply) => {
+      try {
+        const runId = workflowRunIdSchema.parse(request.params.runId);
+        const body = workflowCompleteSchema.parse(request.body ?? {});
+        return await orchestrationService.completeWorkflowTask(
+          request.params.rootTaskId,
+          runId,
+          request.params.taskId,
+          body,
+        );
+      } catch (error) {
+        return handleError(error, reply);
+      }
+    },
+  );
+
+  app.post<{ Params: { rootTaskId: string; runId: string; taskId: string } }>(
+    '/tasks/:rootTaskId/workflows/:runId/nodes/:taskId/human-input',
+    async (request, reply) => {
+      try {
+        const runId = workflowRunIdSchema.parse(request.params.runId);
+        const body = workflowHumanInputRequestSchema.parse(request.body);
+        return await orchestrationService.requestHumanInput(
+          request.params.rootTaskId,
+          runId,
+          request.params.taskId,
+          {
+            requestKey: body.requestKey,
+            question: body.question,
+            context: body.context,
+            options: body.options,
+            allowFreeText: body.allowFreeText,
+          },
+          body,
+        );
+      } catch (error) {
+        return handleError(error, reply);
+      }
+    },
+  );
+
+  app.post<{ Params: { rootTaskId: string; runId: string; taskId: string; questionId: string } }>(
+    '/tasks/:rootTaskId/workflows/:runId/nodes/:taskId/human-input/:questionId/answer',
+    async (request, reply) => {
+      try {
+        const runId = workflowRunIdSchema.parse(request.params.runId);
+        const body = workflowHumanInputAnswerSchema.parse(request.body);
+        return await orchestrationService.answerHumanInput(
+          request.params.rootTaskId,
+          runId,
+          request.params.taskId,
+          request.params.questionId,
+          body.answer,
+          body,
+        );
+      } catch (error) {
+        return handleError(error, reply);
+      }
+    },
+  );
 
   app.post<{ Params: { id: string } }>('/tasks/:id/orchestration/ready', async (request, reply) => {
     try {

@@ -6,6 +6,7 @@ import { STATUS_STYLES, STATUS_ORDER } from './status-styles'
 import { useI18n, translate } from '@/lib/i18n'
 import type { UITask, UIProject } from './types'
 import { UITaskStatus } from './types'
+import { OrchestrationStatusBadge } from './orchestration-ui'
 
 export interface FlipHandle {
   registry: Map<string, HTMLElement>
@@ -171,6 +172,7 @@ function DraggableTaskCard({
         >
           {task.title}
         </span>
+        <OrchestrationStatusBadge status={task.orchestrationStatus} compact />
         {task.projectArchivedAt && (
           <span className="inline-flex shrink-0 items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
             {task.projectRepoDeletedAt ? t('源码已删除') : t('已删除')}

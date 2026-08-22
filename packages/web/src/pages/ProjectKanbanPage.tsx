@@ -159,6 +159,7 @@ function taskToBoardItem(task: Task): TaskBoardItem {
     projectId: task.projectId,
     title: task.titlePreview ?? task.title,
     status: task.status,
+    orchestrationStatus: task.orchestrationStatus,
     ...(preferredWorkspace ? {
       preferredWorkspace: {
         ...(preferredWorkspace.workspaceKind === WorkspaceKind.MAIN_DIRECTORY
@@ -301,6 +302,7 @@ export function ProjectKanbanPage() {
         projectColor: 'text-muted-foreground',
         title: task.title,
         status: mapTaskStatusToUI(task.status),
+        orchestrationStatus: task.orchestrationStatus,
         branch,
         mainBranch: 'main',
         description: '',
@@ -814,6 +816,7 @@ export function ProjectKanbanPage() {
               onTaskStatusChange={taskDetailData.projectArchivedAt ? undefined : handleTaskStatusChange}
               autoStartState={backgroundStarts[taskDetailData.id] ?? null}
               onAutoStartRecovered={handleAutoStartRecovered}
+              onSelectTask={setSelectedTaskId}
             />
           ) : effectiveSelectedTaskId && !taskDetailData ? (
             <div className="flex-1 flex items-center justify-center bg-background min-w-0">

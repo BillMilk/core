@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { socketManager } from '../manager.js'
 import {
   ServerEvents,
+  type TaskOrchestrationUpdatedPayload,
   type TaskUpdatedPayload,
   type TaskDeletedPayload,
 } from '@agent-tower/shared/socket'
@@ -13,6 +14,7 @@ import {
   removeTaskFromBoardCaches,
   removeTaskFromListCaches,
 } from '@/hooks/use-tasks'
+import { invalidateTaskOrchestration } from '@/hooks/use-task-orchestration'
 
 /**
  * 实时同步 Task 状态的 Hook
@@ -58,13 +60,19 @@ export function useTaskRealtimeSync() {
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.all })
     }
 
+    const handleTaskOrchestrationUpdated = (payload: TaskOrchestrationUpdatedPayload) => {
+      invalidateTaskOrchestration(queryClient, payload.taskId, payload.projectId)
+    }
+
     socket.on('connect', handleReconnect)
     socket.on(ServerEvents.TASK_UPDATED, handleTaskUpdated)
+    socket.on(ServerEvents.TASK_ORCHESTRATION_UPDATED, handleTaskOrchestrationUpdated)
     socket.on(ServerEvents.TASK_DELETED, handleTaskDeleted)
 
     return () => {
       socket.off('connect', handleReconnect)
       socket.off(ServerEvents.TASK_UPDATED, handleTaskUpdated)
+      socket.off(ServerEvents.TASK_ORCHESTRATION_UPDATED, handleTaskOrchestrationUpdated)
       socket.off(ServerEvents.TASK_DELETED, handleTaskDeleted)
     }
   }, [queryClient])

@@ -14,7 +14,7 @@
 
 从能力结构看，当前版本已经吸收了类似 Stoneforge 的任务依赖、编排状态机、Worker 认领、租约心跳、异常恢复和事件审计设计。不过，仓库中没有 Stoneforge 的代码引用或来源标记，因此只能确认“能力和架构风格相近”，不能将其表述为完整 Stoneforge 移植。
 
-任务编排当前主要是后端控制面。依赖图 UI、自动任务拆解、TeamRun 自动派发、编排事件前端消费和实际合并执行器尚未形成完整闭环。
+任务编排已经具备后端控制面和 Web 最小操作界面：任务详情可以维护依赖、查看 Readiness/blocker、Worker 租约信息和 TaskEvent 时间线，看板会区分编排状态，Web 也会实时消费编排事件。自动任务拆解、TeamRun 自动派发和实际合并执行器仍未形成完整闭环。
 
 ## 2. 差异范围
 
@@ -440,28 +440,28 @@ packaged smoke 当前可以验证：
 
 ## 10. 尚未形成闭环的能力
 
-### 10.1 编排 UI 缺失
+### 10.1 编排 UI 已实现最小闭环
 
-状态：后端已有，前端未实现。
+状态：本轮已实现桌面端和移动端 Task Detail 编排面板，并在看板任务卡片显示独立编排状态。
 
-缺少：
+已实现：
 
-- 任务依赖关系的可视化。
 - 前置任务和后继任务列表。
-- 添加、删除依赖的交互。
-- 循环依赖错误的用户提示。
-- Readiness 和 blocker 展示。
+- 添加、删除依赖的交互，以及后端循环依赖错误提示。
+- Readiness、blocker 和可领取状态展示。
 - 编排状态与普通看板状态的区分展示。
-- Worker、attempt、heartbeat 和 last error 展示。
+- Worker、attempt、claim、heartbeat 和 last error 展示。
+- 后端状态机允许的人工状态流转、人工认领和心跳操作。
 - TaskEvent 时间线。
+- 归档项目只读保护，以及桌面端和移动端适配。
 
-影响：用户无法从 UI 直接理解或维护 DAG，只能通过 REST API 使用后端能力。
+仍待完善：项目级 DAG 图、关键路径和瓶颈可视化，以及更适合大量任务的依赖搜索和分页。
 
-### 10.2 前端未消费编排 Socket 事件
+### 10.2 前端已消费编排 Socket 事件
 
-状态：服务端已经广播，Web 端未找到对应订阅和缓存更新逻辑。
+状态：Web 全局实时同步已订阅 `task:orchestration_updated`，并失效任务详情、编排查询、项目任务列表和看板缓存。
 
-影响：即使外部 Worker 改变编排状态，前端也不能依靠 `task:orchestration_updated` 实时刷新专用编排视图。
+服务端在依赖添加/删除和 Worker heartbeat 后也会广播该事件，外部 Worker 的操作可触发 UI 刷新。
 
 ### 10.3 TeamRun 未接入 Ready Queue
 
@@ -590,7 +590,7 @@ packaged smoke 当前可以验证：
 
 ### 10.12 未提交代码尚未版本化
 
-Windows PATH、CLI 检测、Provider 标签、运行状态条、弹窗修复和目录版打包流程都还在工作区中。
+Windows PATH、CLI 检测、Provider 标签、运行状态条、弹窗修复和目录版打包流程已提交到 `326a27e`。当前未版本化的是本轮任务编排 UI、查询 hooks、Socket 缓存同步、服务端补充广播、测试和本文档更新。
 
 风险：
 
@@ -611,12 +611,12 @@ Windows PATH、CLI 检测、Provider 标签、运行状态条、弹窗修复和�
 
 ### P1：完成任务编排最小闭环
 
-1. Web 端订阅 `task:orchestration_updated`。
-2. 在 Task Detail 展示编排状态、blockers、Worker、attempt 和 last error。
-3. 增加依赖列表以及添加/删除依赖 UI。
-4. 在任务看板标识 READY、BLOCKED、RUNNING、REVIEW 等编排状态。
+1. [x] Web 端订阅 `task:orchestration_updated`。
+2. [x] 在 Task Detail 展示编排状态、blockers、Worker、attempt 和 last error。
+3. [x] 增加依赖列表以及添加/删除依赖 UI。
+4. [x] 在任务看板标识 READY、BLOCKED、RUNNING、REVIEW 等编排状态。
 5. TeamRun 接入 Ready Queue 和 Claim Next。
-6. 增加 Worker heartbeat 和任务完成后的自动推进。
+6. [部分完成] 已有 Worker heartbeat API 和人工操作 UI；任务完成后的自动推进尚未接入 TeamRun。
 7. 实现并发上限和 Agent 忙碌 backpressure。
 
 ### P1：完成 Review、Handoff 和 Merge
@@ -648,16 +648,16 @@ Windows PATH、CLI 检测、Provider 标签、运行状态条、弹窗修复和�
 
 任务编排可以被称为“前后端闭环”前，至少满足：
 
-- 用户可以在 UI 创建和删除任务依赖。
-- UI 能显示 blockers 和 Ready 状态。
-- 前端实时消费编排 Socket 事件。
+- [x] 用户可以在 UI 创建和删除任务依赖。
+- [x] UI 能显示 blockers 和 Ready 状态。
+- [x] 前端实时消费编排 Socket 事件。
 - TeamRun Worker 能自动领取依赖已完成的任务。
 - 两个 Worker 不会同时认领同一任务。
 - Worker 崩溃后任务能自动恢复并重新分配。
 - Review 可以批准或退回。
 - Merge 状态会实际执行 Workspace 合并。
 - 合并失败会产生可见错误和修复流程。
-- TaskEvent 时间线能解释任务为何处于当前状态。
+- [x] TaskEvent 时间线能展示状态流转、操作者和事件 payload。
 - 从创建依赖 DAG 到全部任务完成可以不调用隐藏 REST API 手工推进。
 
 Windows 桌面增强可以被称为“正式版本”前，至少满足：

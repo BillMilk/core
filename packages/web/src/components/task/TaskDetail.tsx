@@ -53,6 +53,7 @@ import { ProviderSelector } from './ProviderSelector'
 import { SlashCommandPopover } from './SlashCommandPopover'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { DeleteTaskConfirmDialog } from './DeleteTaskConfirmDialog'
+import { TaskOrchestrationPanel } from './TaskOrchestrationPanel'
 import { ConflictBanner } from '@/components/workspace/ConflictBanner'
 import { ResolveConflictsDialog } from '@/components/workspace/ResolveConflictsDialog'
 import { WorkspaceChangeSummaryBar } from '@/components/workspace/WorkspaceChangeSummaryBar'
@@ -97,6 +98,8 @@ interface TaskDetailProps {
   } | null
   /** 自动启动失败后，用户手动重试成功时通知父级清理后台失败状态。 */
   onAutoStartRecovered?: (taskId: string) => void
+  /** Open another task, used by durable workflow node links. */
+  onSelectTask?: (taskId: string) => void
 }
 
 // ============ Layout Constants ============
@@ -253,7 +256,7 @@ function AutoStartStatus({
 
 // ============ TaskDetail Component ============
 
-export function TaskDetail({ task, onDeleteTask, isDeleting, onTaskStatusChange, autoStartState, onAutoStartRecovered }: TaskDetailProps) {
+export function TaskDetail({ task, onDeleteTask, isDeleting, onTaskStatusChange, autoStartState, onAutoStartRecovered, onSelectTask }: TaskDetailProps) {
   const { t } = useI18n()
   const [input, setInput] = useState('')
   const [isStartDialogOpen, setIsStartDialogOpen] = useState(false)
@@ -1103,6 +1106,14 @@ export function TaskDetail({ task, onDeleteTask, isDeleting, onTaskStatusChange,
           </div>
         </div>
       </div>
+
+      <TaskOrchestrationPanel
+        taskId={task.id}
+        projectId={task.projectId}
+        orchestrationStatus={task.orchestrationStatus}
+        onOpenTask={onSelectTask}
+        readOnly={isProjectReadOnly}
+      />
 
       {/* Conflict Banner */}
       {canRunSelectedWorkspaceGitOperations && selectedWorkspaceOperationId && gitStatus && (

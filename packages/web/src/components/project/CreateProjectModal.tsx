@@ -20,6 +20,12 @@ interface ValidateResponse {
   error?: string
 }
 
+export function requiresGitInitializationConfirmation(
+  validation: Pick<ValidateResponse, 'valid' | 'reason' | 'isGitRepo'>,
+): boolean {
+  return validation.valid && validation.isGitRepo !== true && validation.reason === 'no_git'
+}
+
 export function CreateProjectModal({ isOpen, onClose }: CreateProjectModalProps) {
   const { t } = useI18n()
   const createProject = useCreateProject()
@@ -28,6 +34,7 @@ export function CreateProjectModal({ isOpen, onClose }: CreateProjectModalProps)
   const [formError, setFormError] = useState<string | null>(null)
   const [isChecking, setIsChecking] = useState(false)
   const [showInitConfirm, setShowInitConfirm] = useState(false)
+  const [pendingInitDirectoryIsEmpty, setPendingInitDirectoryIsEmpty] = useState(false)
 
   const trimmedName = projectName.trim()
   const trimmedRepoPath = repoPath.trim()
@@ -43,6 +50,7 @@ export function CreateProjectModal({ isOpen, onClose }: CreateProjectModalProps)
     setRepoPath('')
     setFormError(null)
     setShowInitConfirm(false)
+    setPendingInitDirectoryIsEmpty(false)
   }, [])
 
   const closeModal = useCallback(() => {
@@ -93,13 +101,9 @@ export function CreateProjectModal({ isOpen, onClose }: CreateProjectModalProps)
         return
       }
 
-      if (validation.reason === 'no_git' && validation.isEmpty) {
+      if (requiresGitInitializationConfirmation(validation)) {
+        setPendingInitDirectoryIsEmpty(validation.isEmpty === true)
         setShowInitConfirm(true)
-        return
-      }
-
-      if (validation.reason === 'no_git') {
-        await createWithCurrentValues(false)
         return
       }
 
@@ -219,7 +223,9 @@ export function CreateProjectModal({ isOpen, onClose }: CreateProjectModalProps)
       >
         <div className="space-y-3 text-sm text-neutral-600 leading-relaxed">
           <p>
-            {t('This directory is empty and does not have Git version control yet. Agent Tower can initialize Git and create the initial commit before creating the project.')}
+            {pendingInitDirectoryIsEmpty
+              ? t('This directory is empty and does not have Git version control yet. Agent Tower can initialize Git and create the initial commit before creating the project.')
+              : t('This directory contains files but is not a Git repository. Agent Tower can initialize Git, add files not excluded by .gitignore, and create the initial commit before creating the project.')}
           </p>
           <p>
             {t('You can also create it as a local project now. Local projects only support local Solo tasks until Git is initialized.')}

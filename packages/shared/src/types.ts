@@ -26,6 +26,7 @@ export enum TaskOrchestrationStatus {
   READY = 'READY',
   ASSIGNED = 'ASSIGNED',
   RUNNING = 'RUNNING',
+  WAITING_INPUT = 'WAITING_INPUT',
   REVIEW = 'REVIEW',
   MERGING = 'MERGING',
   DONE = 'DONE',
@@ -582,6 +583,95 @@ export interface TaskReadinessResponse {
   orchestrationStatus: TaskOrchestrationStatus
   ready: boolean
   blockers: TaskDependency[]
+}
+
+/** Declarative node stored in the durable Task/TaskDependency workflow graph. */
+export interface TaskWorkflowNodeInput {
+  key: string
+  title: string
+  description?: string
+  role: string
+  promptFile?: string
+  outputPaths?: string[]
+  verifyId?: string
+  dependsOnKeys?: string[]
+  priority?: number
+}
+
+export interface TaskWorkflowNode {
+  key: string
+  role: string
+  promptFile?: string
+  outputPaths: string[]
+  verifyId?: string
+  dependsOnKeys: string[]
+  /** Latest durable human decision for this node, when one has been requested. */
+  humanInput?: TaskHumanInput
+  task: Pick<
+    Task,
+    | 'id'
+    | 'projectId'
+    | 'title'
+    | 'description'
+    | 'status'
+    | 'orchestrationStatus'
+    | 'orchestrationClaimedBy'
+    | 'orchestrationClaimedAt'
+    | 'orchestrationHeartbeatAt'
+    | 'orchestrationAttemptCount'
+    | 'orchestrationLastError'
+    | 'priority'
+  >
+}
+
+export interface TaskHumanInput {
+  questionId: string
+  rootTaskId: string
+  runId: string
+  nodeKey: string
+  taskId: string
+  question: string
+  context?: string
+  options: string[]
+  allowFreeText: boolean
+  requestedByMemberId?: string | null
+  requestedAt: string
+  status: 'WAITING' | 'ANSWERED'
+  answer?: string
+  answeredAt?: string
+  answeredBy?: string | null
+}
+
+export interface TaskHumanInputAnswerResult {
+  humanInput: TaskHumanInput
+  task: Pick<
+    Task,
+    | 'id'
+    | 'projectId'
+    | 'title'
+    | 'status'
+    | 'orchestrationStatus'
+    | 'orchestrationClaimedBy'
+    | 'orchestrationClaimedAt'
+    | 'orchestrationHeartbeatAt'
+    | 'orchestrationAttemptCount'
+    | 'orchestrationLastError'
+  >
+  resumed: boolean
+}
+
+export interface TaskWorkflowDag {
+  rootTaskId: string
+  projectId: string
+  runId: string
+  nodes: TaskWorkflowNode[]
+  edges: Array<{ taskKey: string; dependsOnKey: string }>
+  counts: Partial<Record<TaskOrchestrationStatus, number>>
+}
+
+export interface TaskWorkflowListResponse {
+  rootTaskId: string
+  workflows: TaskWorkflowDag[]
 }
 
 export type TaskBodySource = 'description' | 'historical_title' | 'none'

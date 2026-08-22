@@ -4,6 +4,7 @@ import type {
   TeamRunInvalidationScope,
   TeamRunReviewReason,
 } from '@agent-tower/shared';
+import { TaskOrchestrationStatus } from '@agent-tower/shared';
 import type { Prisma } from '@prisma/client';
 import type { EventBus } from '../core/event-bus.js';
 import { TaskStatus } from '../types/index.js';
@@ -29,6 +30,16 @@ const ACTIVE_INVOCATION_STATUSES: AgentInvocationStatus[] = [
 ];
 const OPEN_WORK_REQUEST_STATUSES = ['QUEUED', 'PENDING_APPROVAL'];
 const TEAM_QUIESCENT_REVIEW_REASON: TeamRunReviewReason = 'TEAM_QUIESCENT';
+
+function humanInputRootTaskId(payload: string | null): string | null {
+  if (!payload) return null;
+  try {
+    const value = JSON.parse(payload) as Record<string, unknown>;
+    return typeof value.rootTaskId === 'string' ? value.rootTaskId : null;
+  } catch {
+    return null;
+  }
+}
 
 type InvocationWithTaskState = Prisma.AgentInvocationGetPayload<{
   include: {
@@ -608,6 +619,29 @@ export class TeamReconcilerService {
     });
     if (hasOpenWorkRequest) {
       return false;
+    }
+
+    const humanInputRequests = await prisma.taskEvent.findMany({
+      where: {
+        projectId: teamRun.task.projectId,
+        type: 'task.human_input_requested',
+      },
+      select: { taskId: true, payload: true },
+    });
+    const waitingTaskIds = humanInputRequests
+      .filter((event) => humanInputRootTaskId(event.payload) === teamRun.taskId)
+      .map((event) => event.taskId);
+    if (waitingTaskIds.length > 0) {
+      const waitingForHumanInput = await prisma.task.count({
+        where: {
+          id: { in: waitingTaskIds },
+          orchestrationStatus: TaskOrchestrationStatus.WAITING_INPUT,
+          deletedAt: null,
+        },
+      });
+      if (waitingForHumanInput > 0) {
+        return false;
+      }
     }
 
     const updatedTask = await prisma.$transaction(async (tx) => {

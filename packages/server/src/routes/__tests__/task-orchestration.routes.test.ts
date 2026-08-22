@@ -10,7 +10,9 @@ import { TaskOrchestrationStatus } from '@agent-tower/shared';
 
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-tower-orchestration-routes-'));
 const dbPath = path.join(testDir, 'test.db');
-process.env.AGENT_TOWER_DATABASE_URL = `file:${dbPath}`;
+fs.closeSync(fs.openSync(dbPath, 'w'));
+const databaseUrl = `file:${dbPath.replaceAll('\\', '/')}`;
+process.env.AGENT_TOWER_DATABASE_URL = databaseUrl;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,7 +33,7 @@ describe('task orchestration routes', () => {
       `--schema=${schemaPath}`,
     ], {
       cwd: serverRoot,
-      env: { ...process.env, AGENT_TOWER_DATABASE_URL: `file:${dbPath}` },
+      env: { ...process.env, AGENT_TOWER_DATABASE_URL: databaseUrl },
       stdio: 'pipe',
     });
 
@@ -141,6 +143,127 @@ describe('task orchestration routes', () => {
         expect.objectContaining({ type: 'task.dependency_added' }),
         expect.objectContaining({ type: 'task.claimed' }),
       ]));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('exposes idempotent generic workflow DAG endpoints', async () => {
+    const project = await prisma.project.create({
+      data: { name: 'Workflow route project', repoPath: testDir },
+    });
+    const root = await prisma.task.create({
+      data: { title: 'Root workflow task', projectId: project.id },
+    });
+    const app = Fastify();
+    await app.register(taskRoutes, { prefix: '/api' });
+
+    try {
+      const payload = {
+        runId: 'generic-001',
+        nodes: [
+          { key: 'inspect', title: 'Inspect', role: 'Reader' },
+          { key: 'write', title: 'Write', role: 'Writer', dependsOnKeys: ['inspect'] },
+        ],
+      };
+      const created = await app.inject({
+        method: 'POST',
+        url: `/api/tasks/${root.id}/workflows`,
+        payload,
+      });
+      expect(created.statusCode).toBe(201);
+      expect(created.json()).toMatchObject({ runId: 'generic-001' });
+
+      const repeated = await app.inject({
+        method: 'POST',
+        url: `/api/tasks/${root.id}/workflows`,
+        payload,
+      });
+      expect(repeated.statusCode).toBe(201);
+      expect(repeated.json().nodes.map((node: any) => node.task.id))
+        .toEqual(created.json().nodes.map((node: any) => node.task.id));
+
+      const listed = await app.inject({
+        method: 'GET',
+        url: `/api/tasks/${root.id}/workflows`,
+      });
+      expect(listed.statusCode).toBe(200);
+      expect(listed.json().workflows).toHaveLength(1);
+      expect(listed.json().workflows[0].edges).toEqual([
+        { taskKey: 'write', dependsOnKey: 'inspect' },
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('exposes structured human-input request and answer endpoints', async () => {
+    const project = await prisma.project.create({
+      data: { name: 'Human input route project', repoPath: testDir },
+    });
+    const root = await prisma.task.create({
+      data: { title: 'Root workflow task', projectId: project.id },
+    });
+    const app = Fastify();
+    await app.register(taskRoutes, { prefix: '/api' });
+
+    try {
+      const created = await app.inject({
+        method: 'POST',
+        url: `/api/tasks/${root.id}/workflows`,
+        payload: {
+          runId: 'human-route-001',
+          nodes: [{ key: 'scope', title: 'Resolve source root', role: 'Analyst' }],
+        },
+      });
+      const node = created.json().nodes[0];
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/tasks/${node.task.id}/orchestration/claim`,
+        payload: { workerId: 'analyst-a' },
+      });
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/tasks/${node.task.id}/orchestration`,
+        payload: { status: TaskOrchestrationStatus.RUNNING, workerId: 'analyst-a' },
+      });
+
+      const directTransition = await app.inject({
+        method: 'PATCH',
+        url: `/api/tasks/${node.task.id}/orchestration`,
+        payload: { status: TaskOrchestrationStatus.WAITING_INPUT, workerId: 'analyst-a' },
+      });
+      expect(directTransition.statusCode).toBe(400);
+
+      const requested = await app.inject({
+        method: 'POST',
+        url: `/api/tasks/${root.id}/workflows/human-route-001/nodes/${node.task.id}/human-input`,
+        payload: {
+          requestKey: 'source-root',
+          question: 'Which source root should be analyzed?',
+          options: ['service-a', 'service-b'],
+          allowFreeText: false,
+          workerId: 'analyst-a',
+        },
+      });
+      expect(requested.statusCode).toBe(200);
+      expect(requested.json()).toMatchObject({
+        humanInput: { status: 'WAITING' },
+        task: { orchestrationStatus: TaskOrchestrationStatus.WAITING_INPUT },
+      });
+
+      const answered = await app.inject({
+        method: 'POST',
+        url: `/api/tasks/${root.id}/workflows/human-route-001/nodes/${node.task.id}/human-input/${requested.json().humanInput.questionId}/answer`,
+        payload: { answer: 'service-a', actorType: 'USER' },
+      });
+      expect(answered.statusCode).toBe(200);
+      expect(answered.json()).toMatchObject({
+        resumed: true,
+        humanInput: { status: 'ANSWERED', answer: 'service-a' },
+        task: { orchestrationStatus: TaskOrchestrationStatus.READY },
+      });
     } finally {
       await app.close();
     }

@@ -103,15 +103,6 @@ function assertDirectoryPathExists(resolvedPath: string): void {
   }
 }
 
-async function assertDirectoryIsEmpty(resolvedPath: string): Promise<void> {
-  const entries = await fsPromises.readdir(resolvedPath);
-  if (entries.length > 0) {
-    throw new ValidationError(
-      `Project path is not a Git repository and is not empty: ${resolvedPath}`
-    );
-  }
-}
-
 /**
  * 若仓库无任何提交，自动执行一次空提交作为初始基准。
  * git worktree 依赖 HEAD 指向有效 commit，空仓库无法创建 worktree。
@@ -135,15 +126,27 @@ async function ensureRepoHasCommit(repoPath: string): Promise<void> {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new ValidationError(
-        `Failed to create initial commit in empty repository: ${msg}`
+        `Failed to create initial commit in repository: ${msg}`
       );
     }
   }
 }
 
-async function initializeEmptyRepository(repoPath: string): Promise<void> {
+async function initializeRepository(repoPath: string): Promise<void> {
   await execGit(repoPath, ['init']);
   await execGit(repoPath, ['symbolic-ref', 'HEAD', 'refs/heads/main']);
+  await execGit(repoPath, ['add', '--all']);
+  await execGit(repoPath, [
+    '-c',
+    'user.name=Agent Tower',
+    '-c',
+    'user.email=agent-tower@local',
+    'commit',
+    '--allow-empty',
+    '--no-gpg-sign',
+    '-m',
+    'chore: initial commit',
+  ]);
 }
 
 async function removeGitMetadata(repoPath: string): Promise<void> {
@@ -184,9 +187,8 @@ async function prepareRepoForProjectCreate(
       };
     }
 
-    await assertDirectoryIsEmpty(resolvedPath);
     try {
-      await initializeEmptyRepository(resolvedPath);
+      await initializeRepository(resolvedPath);
       initialized = true;
     } catch (error) {
       await removeGitMetadata(resolvedPath);
@@ -346,7 +348,7 @@ export class ProjectService {
    * 创建项目
    * - 校验项目路径是否存在且为目录
    * - 允许非 Git 目录作为本地项目打开
-   * - 允许对空目录执行 Git 初始化
+   * - 经用户确认后，允许对非 Git 目录执行 Git 初始化和首次提交
    */
   async create(input: CreateProjectInput) {
     // 检查同名项目
@@ -428,6 +430,40 @@ export class ProjectService {
       throw new NotFoundError('Project', id);
     }
     return detectAndStoreProjectGitCapability(project);
+  }
+
+  async initializeGit(id: string) {
+    const project = await prisma.project.findUnique({ where: { id } });
+    if (!project) {
+      throw new NotFoundError('Project', id);
+    }
+    ensureProjectIsMutable(project, 'initialize Git');
+
+    const { resolvedPath, repoRemoteUrl, initialized } = await prepareRepoForProjectCreate(
+      project.repoPath,
+      true,
+    );
+
+    try {
+      const capability = await detectProjectGitCapability(resolvedPath);
+      const updated = await prisma.project.update({
+        where: { id },
+        data: {
+          repoPath: resolvedPath,
+          repoRemoteUrl,
+          isGitRepo: capability.isGitRepo,
+          worktreeReady: capability.worktreeReady,
+          gitCapabilityReason: capability.reason,
+          gitCapabilityCheckedAt: new Date(),
+        },
+      });
+      return this.withGitMetadata(updated);
+    } catch (error) {
+      if (initialized) {
+        await removeGitMetadata(resolvedPath);
+      }
+      throw error;
+    }
   }
 
   /**
